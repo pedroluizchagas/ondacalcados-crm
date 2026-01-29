@@ -1,0 +1,1583 @@
+'use client'
+
+import React from "react"
+
+import { useState, useMemo, useRef } from 'react'
+import { mockPayroll, mockEmployees, mockStores, getStoreName, getPositionName, getBaseSalary } from '@/lib/mock-data'
+import type { PayrollItem } from '@/types'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Badge } from '@/components/ui/badge'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Separator } from '@/components/ui/separator'
+import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, CreditCard, Pencil, Plus, Loader2, Upload, FileSpreadsheet, Printer, Trash2 } from 'lucide-react'
+import type { PayrollEvent } from '@/types'
+import { useToast } from '@/hooks/use-toast'
+
+interface ExtendedPayrollItem extends PayrollItem {
+  settlementDate?: string
+  settlementLocation?: string
+  customEvents?: PayrollEvent[]
+}
+
+const statusMap: Record<PayrollItem['status'], { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
+  pending: { label: 'Pendente', variant: 'outline' },
+  paid: { label: 'Pago', variant: 'default' },
+}
+
+const paymentTypeMap: Record<PayrollItem['paymentType'], string> = {
+  contabil: 'Contabil',
+  nao_contabil: 'Nao Contabil',
+}
+
+const settlementLocations = [
+  'Banco',
+  'Dinheiro em Maos',
+  'Pix',
+  'Transferencia',
+  'Cheque',
+]
+
+const months = [
+  { value: 1, label: 'Janeiro' },
+  { value: 2, label: 'Fevereiro' },
+  { value: 3, label: 'Marco' },
+  { value: 4, label: 'Abril' },
+  { value: 5, label: 'Maio' },
+  { value: 6, label: 'Junho' },
+  { value: 7, label: 'Julho' },
+  { value: 8, label: 'Agosto' },
+  { value: 9, label: 'Setembro' },
+  { value: 10, label: 'Outubro' },
+  { value: 11, label: 'Novembro' },
+  { value: 12, label: 'Dezembro' },
+]
+
+export default function FolhaPagamentoPage() {
+  const [payrolls, setPayrolls] = useState<ExtendedPayrollItem[]>(mockPayroll)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [storeFilter, setStoreFilter] = useState<string>('all')
+  const [paymentTypeFilter, setPaymentTypeFilter] = useState<string>('all')
+  const [monthFilter, setMonthFilter] = useState<string>('all')
+  const [yearFilter, setYearFilter] = useState<string>(new Date().getFullYear().toString())
+  const [selectedPayroll, setSelectedPayroll] = useState<ExtendedPayrollItem | null>(null)
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false)
+  const [isEditOpen, setIsEditOpen] = useState(false)
+  const [isNewOpen, setIsNewOpen] = useState(false)
+  const [isSettlementOpen, setIsSettlementOpen] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const { toast } = useToast()
+
+  // Settlement form state
+  const [settlementForm, setSettlementForm] = useState({
+    date: new Date().toISOString().split('T')[0],
+    location: '',
+  })
+
+  // Form state for editing
+  const [editForm, setEditForm] = useState({
+    commissions: '',
+    employeePurchases: '',
+    vouchers: '',
+    advances: '',
+    inss: '',
+    fgts: '',
+    paymentType: 'contabil' as 'contabil' | 'nao_contabil',
+  })
+
+  // Custom events state
+  const [customEvents, setCustomEvents] = useState<PayrollEvent[]>([])
+  const [newEventForm, setNewEventForm] = useState({
+    description: '',
+    type: 'provento' as 'provento' | 'desconto',
+    value: '',
+  })
+
+  // Form state for new payroll
+  const [newForm, setNewForm] = useState({
+    employeeId: '',
+    month: new Date().getMonth() + 1,
+    year: new Date().getFullYear(),
+    commissions: '',
+    employeePurchases: '',
+    vouchers: '',
+    advances: '',
+    inss: '',
+    fgts: '',
+    paymentType: 'contabil' as 'contabil' | 'nao_contabil',
+  })
+
+  // Custom events for new payroll
+  const [newPayrollEvents, setNewPayrollEvents] = useState<PayrollEvent[]>([])
+  const [newPayrollEventForm, setNewPayrollEventForm] = useState({
+    description: '',
+    type: 'provento' as 'provento' | 'desconto',
+    value: '',
+  })
+
+  const stats = useMemo(() => {
+    const pending = payrolls.filter((p) => p.status === 'pending')
+    const paid = payrolls.filter((p) => p.status === 'paid')
+    const totalPending = pending.reduce((sum, p) => sum + p.netSalary, 0)
+    const totalPaid = paid.reduce((sum, p) => sum + p.netSalary, 0)
+    return {
+      pendingCount: pending.length,
+      paidCount: paid.length,
+      totalPending,
+      totalPaid,
+    }
+  }, [payrolls])
+
+  const filteredPayrolls = useMemo(() => {
+    return payrolls.filter((payroll) => {
+      const matchesSearch = payroll.employeeName
+        .toLowerCase()
+        .includes(searchTerm.toLowerCase())
+      const matchesStatus = statusFilter === 'all' || payroll.status === statusFilter
+      const matchesStore = storeFilter === 'all' || payroll.storeId === storeFilter
+      const matchesPaymentType = paymentTypeFilter === 'all' || payroll.paymentType === paymentTypeFilter
+      const matchesMonth = monthFilter === 'all' || payroll.month === parseInt(monthFilter, 10)
+      const matchesYear = yearFilter === 'all' || payroll.year === parseInt(yearFilter, 10)
+      return matchesSearch && matchesStatus && matchesStore && matchesPaymentType && matchesMonth && matchesYear
+    })
+  }, [payrolls, searchTerm, statusFilter, storeFilter, paymentTypeFilter, monthFilter, yearFilter])
+
+  // Get unique years from payrolls
+  const availableYears = useMemo(() => {
+    const years = [...new Set(payrolls.map(p => p.year))].sort((a, b) => b - a)
+    return years
+  }, [payrolls])
+
+  const activeEmployees = useMemo(() => {
+    return mockEmployees.filter(e => e.status === 'active')
+  }, [])
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value)
+  }
+
+  // Calculo: (Salario Base + Comissao + Proventos) - (Compras + Vales + Adiantamento + INSS + Descontos). FGTS e mostrado mas nao subtraido
+  const calculatePayroll = (baseSalary: number, form: typeof editForm, events: PayrollEvent[] = []) => {
+    const commissions = parseFloat(form.commissions) || 0
+    const employeePurchases = parseFloat(form.employeePurchases) || 0
+    const vouchers = parseFloat(form.vouchers) || 0
+    const advances = parseFloat(form.advances) || 0
+    const inss = parseFloat(form.inss) || 0
+    const fgts = parseFloat(form.fgts) || 0
+
+    // Calculate custom events
+    const eventProventos = events.filter(e => e.type === 'provento').reduce((sum, e) => sum + e.value, 0)
+    const eventDescontos = events.filter(e => e.type === 'desconto').reduce((sum, e) => sum + e.value, 0)
+
+    const grossSalary = baseSalary + commissions + eventProventos
+    const totalDeductions = employeePurchases + vouchers + advances + inss + eventDescontos
+    const netSalary = grossSalary - totalDeductions
+
+    return {
+      grossSalary,
+      totalDeductions,
+      netSalary,
+      commissions,
+      employeePurchases,
+      vouchers,
+      advances,
+      inss,
+      fgts,
+    }
+  }
+
+  // Add custom event
+  const handleAddEvent = () => {
+    if (!newEventForm.description || !newEventForm.value) return
+    
+    const parsedValue = parseFloat(newEventForm.value.replace(',', '.')) || 0
+    if (parsedValue <= 0) return
+    
+    const newEvent: PayrollEvent = {
+      id: `event-${Date.now()}`,
+      description: newEventForm.description,
+      type: newEventForm.type,
+      value: parsedValue,
+    }
+    
+    setCustomEvents([...customEvents, newEvent])
+    setNewEventForm({ description: '', type: 'provento', value: '' })
+  }
+
+  // Remove custom event
+  const handleRemoveEvent = (eventId: string) => {
+    setCustomEvents(customEvents.filter(e => e.id !== eventId))
+  }
+
+  // Add custom event for new payroll
+  const handleAddNewPayrollEvent = () => {
+    if (!newPayrollEventForm.description || !newPayrollEventForm.value) return
+    
+    const parsedValue = parseFloat(newPayrollEventForm.value.replace(',', '.')) || 0
+    if (parsedValue <= 0) return
+    
+    const newEvent: PayrollEvent = {
+      id: `new-event-${Date.now()}`,
+      description: newPayrollEventForm.description,
+      type: newPayrollEventForm.type,
+      value: parsedValue,
+    }
+    
+    setNewPayrollEvents([...newPayrollEvents, newEvent])
+    setNewPayrollEventForm({ description: '', type: 'provento', value: '' })
+  }
+
+  // Remove custom event from new payroll
+  const handleRemoveNewPayrollEvent = (eventId: string) => {
+    setNewPayrollEvents(newPayrollEvents.filter(e => e.id !== eventId))
+  }
+
+  // Print report
+  const handlePrintReport = () => {
+    const printContent = document.getElementById('payroll-print-content')
+    if (!printContent) return
+
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return
+
+    const filteredData = filteredPayrolls.map(p => ({
+      name: p.employeeName,
+      store: getStoreName(p.storeId),
+      gross: formatCurrency(p.grossSalary),
+      deductions: formatCurrency(p.totalDeductions),
+      net: formatCurrency(p.netSalary),
+      status: statusMap[p.status].label,
+    }))
+
+    printWindow.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <title>Relatorio de Folha de Pagamento</title>
+        <style>
+          body { font-family: Arial, sans-serif; padding: 20px; }
+          h1 { color: #1e40af; font-size: 24px; }
+          .info { color: #666; margin-bottom: 20px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+          th { background-color: #1e40af; color: white; }
+          tr:nth-child(even) { background-color: #f9f9f9; }
+          .total { font-weight: bold; margin-top: 20px; }
+        </style>
+      </head>
+      <body>
+        <h1>Onda Calcados - Relatorio de Folha de Pagamento</h1>
+        <div class="info">
+          <p>Data: ${new Date().toLocaleDateString('pt-BR')}</p>
+          <p>Filtros: Loja: ${storeFilter === 'all' ? 'Todas' : getStoreName(storeFilter)} | Status: ${statusFilter === 'all' ? 'Todos' : statusMap[statusFilter as keyof typeof statusMap]?.label || statusFilter}</p>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Funcionario</th>
+              <th>Loja</th>
+              <th>Salario Bruto</th>
+              <th>Descontos</th>
+              <th>Liquido</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${filteredData.map(p => `
+              <tr>
+                <td>${p.name}</td>
+                <td>${p.store}</td>
+                <td>${p.gross}</td>
+                <td>${p.deductions}</td>
+                <td>${p.net}</td>
+                <td>${p.status}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        <div class="total">
+          <p>Total Pendente: ${formatCurrency(stats.totalPending)}</p>
+          <p>Total Pago: ${formatCurrency(stats.totalPaid)}</p>
+        </div>
+      </body>
+      </html>
+    `)
+    printWindow.document.close()
+    printWindow.print()
+  }
+
+  const openSettlement = (payroll: ExtendedPayrollItem) => {
+    setSelectedPayroll(payroll)
+    setSettlementForm({
+      date: new Date().toISOString().split('T')[0],
+      location: '',
+    })
+    setIsSettlementOpen(true)
+  }
+
+  const handleMarkAsPaid = () => {
+    if (!selectedPayroll || !settlementForm.location) return
+    
+    setPayrolls(
+      payrolls.map((p) =>
+        p.id === selectedPayroll.id
+          ? {
+              ...p,
+              status: 'paid' as const,
+              paymentDate: settlementForm.date,
+              settlementDate: settlementForm.date,
+              settlementLocation: settlementForm.location,
+            }
+          : p
+      )
+    )
+    setIsSettlementOpen(false)
+    toast({
+      title: 'Pagamento registrado',
+      description: `Pagamento de ${selectedPayroll.employeeName} foi quitado via ${settlementForm.location}.`,
+    })
+  }
+
+  const openEdit = (payroll: ExtendedPayrollItem) => {
+    setSelectedPayroll(payroll)
+    setEditForm({
+      commissions: payroll.commissions.toString(),
+      employeePurchases: payroll.employeePurchases.toString(),
+      vouchers: payroll.vouchers.toString(),
+      advances: payroll.advances.toString(),
+      inss: payroll.inss.toString(),
+      fgts: payroll.fgts.toString(),
+      paymentType: payroll.paymentType,
+    })
+    setCustomEvents(payroll.customEvents || [])
+    setIsEditOpen(true)
+  }
+
+const handleSaveEdit = async () => {
+    if (!selectedPayroll) return
+    setIsSubmitting(true)
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
+    const calculations = calculatePayroll(selectedPayroll.baseSalary, editForm, customEvents)
+    
+    setPayrolls(payrolls.map(p =>
+      p.id === selectedPayroll.id
+        ? {
+            ...p,
+            ...calculations,
+            paymentType: editForm.paymentType,
+            customEvents: customEvents.length > 0 ? [...customEvents] : undefined,
+          }
+        : p
+    ))
+    
+    setIsSubmitting(false)
+    setIsEditOpen(false)
+    setCustomEvents([])
+    setNewEventForm({ description: '', type: 'provento', value: '' })
+    toast({
+      title: 'Folha atualizada',
+      description: `Folha de ${selectedPayroll.employeeName} foi atualizada com sucesso.`,
+    })
+  }
+
+const handleCreatePayroll = async () => {
+    if (!newForm.employeeId) return
+    setIsSubmitting(true)
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
+    const employee = mockEmployees.find(e => e.id === newForm.employeeId)
+    if (!employee) return
+    
+    const baseSalary = getBaseSalary(employee.positionId)
+    const calculations = calculatePayroll(baseSalary, newForm, newPayrollEvents)
+    
+    const newPayroll: ExtendedPayrollItem = {
+      id: (payrolls.length + 1).toString(),
+      employeeId: employee.id,
+      employeeName: employee.name,
+      month: newForm.month,
+      year: newForm.year,
+      storeId: employee.storeId,
+      positionId: employee.positionId,
+      baseSalary,
+      ...calculations,
+      paymentType: newForm.paymentType,
+      status: 'pending',
+      customEvents: newPayrollEvents.length > 0 ? [...newPayrollEvents] : undefined,
+    }
+    
+    setPayrolls([...payrolls, newPayroll])
+    setIsSubmitting(false)
+    setIsNewOpen(false)
+    setNewForm({
+      employeeId: '',
+      month: new Date().getMonth() + 1,
+      year: new Date().getFullYear(),
+      commissions: '',
+      employeePurchases: '',
+      vouchers: '',
+      advances: '',
+      inss: '',
+      fgts: '',
+      paymentType: 'contabil',
+    })
+    setNewPayrollEvents([])
+    setNewPayrollEventForm({ description: '', type: 'provento', value: '' })
+    toast({
+      title: 'Folha criada',
+      description: `Folha de ${employee.name} foi criada com sucesso.`,
+    })
+  }
+
+  // CSV Import Handler
+  const handleCSVImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const text = e.target?.result as string
+      const lines = text.split('\n')
+      const headers = lines[0].split(',').map(h => h.trim().toLowerCase())
+      
+      // Expected headers: nome, comissao, compras, vales, inss, fgts
+      const nameIdx = headers.findIndex(h => h.includes('nome'))
+      const commissionIdx = headers.findIndex(h => h.includes('comiss'))
+      const purchasesIdx = headers.findIndex(h => h.includes('compra'))
+      const vouchersIdx = headers.findIndex(h => h.includes('vale'))
+      const inssIdx = headers.findIndex(h => h.includes('inss'))
+      const fgtsIdx = headers.findIndex(h => h.includes('fgts'))
+
+      let importedCount = 0
+      const updatedPayrolls = [...payrolls]
+
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue
+        
+        const values = lines[i].split(',').map(v => v.trim())
+        const employeeName = nameIdx >= 0 ? values[nameIdx] : ''
+        
+        // Find matching payroll by employee name
+        const payrollIdx = updatedPayrolls.findIndex(p => 
+          p.employeeName.toLowerCase().includes(employeeName.toLowerCase()) ||
+          employeeName.toLowerCase().includes(p.employeeName.toLowerCase())
+        )
+
+        if (payrollIdx >= 0) {
+          const payroll = updatedPayrolls[payrollIdx]
+          const commissions = commissionIdx >= 0 ? parseFloat(values[commissionIdx]) || 0 : payroll.commissions
+          const employeePurchases = purchasesIdx >= 0 ? parseFloat(values[purchasesIdx]) || 0 : payroll.employeePurchases
+          const vouchers = vouchersIdx >= 0 ? parseFloat(values[vouchersIdx]) || 0 : payroll.vouchers
+          const inss = inssIdx >= 0 ? parseFloat(values[inssIdx]) || 0 : payroll.inss
+          const fgts = fgtsIdx >= 0 ? parseFloat(values[fgtsIdx]) || 0 : payroll.fgts
+
+          const grossSalary = payroll.baseSalary + commissions
+          const totalDeductions = employeePurchases + vouchers + payroll.advances + inss
+          const netSalary = grossSalary - totalDeductions
+
+          updatedPayrolls[payrollIdx] = {
+            ...payroll,
+            commissions,
+            employeePurchases,
+            vouchers,
+            inss,
+            fgts,
+            grossSalary,
+            totalDeductions,
+            netSalary,
+          }
+          importedCount++
+        }
+      }
+
+      setPayrolls(updatedPayrolls)
+      toast({
+        title: 'CSV Importado',
+        description: `${importedCount} registro(s) atualizado(s) com sucesso.`,
+      })
+    }
+    reader.readAsText(file)
+    if (fileInputRef.current) {
+      fileInputRef.current.value = ''
+    }
+  }
+
+  const getMonthName = (month: number) => {
+    return months.find(m => m.value === month)?.label || ''
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Folha de Pagamento</h1>
+          <p className="text-muted-foreground">Gerencie proventos, descontos e impostos</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <input
+            type="file"
+            accept=".csv"
+            ref={fileInputRef}
+            onChange={handleCSVImport}
+            className="hidden"
+          />
+          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+            <Upload className="mr-2 h-4 w-4" />
+            Importar CSV
+          </Button>
+          <Button variant="outline" onClick={handlePrintReport}>
+            <Printer className="mr-2 h-4 w-4" />
+            Imprimir Relatorio
+          </Button>
+          <Button onClick={() => setIsNewOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Nova Folha
+          </Button>
+        </div>
+      </div>
+
+      {/* CSV Import Info */}
+      <Card className="bg-muted/50">
+        <CardContent className="p-4">
+          <div className="flex items-start gap-3">
+            <FileSpreadsheet className="h-5 w-5 text-muted-foreground mt-0.5" />
+            <div className="text-sm">
+              <p className="font-medium">Formato do CSV para importacao:</p>
+              <p className="text-muted-foreground">Colunas esperadas: Nome, Comissao, Compras, Vales, INSS, FGTS</p>
+              <p className="text-muted-foreground">O sistema mapeia automaticamente os dados pelo nome do funcionario.</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Stats Cards */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Pendentes</CardTitle>
+            <Clock className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.pendingCount}</div>
+            <p className="text-xs text-muted-foreground">Pagamentos a realizar</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Pagos</CardTitle>
+            <CheckCircle className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats.paidCount}</div>
+            <p className="text-xs text-muted-foreground">Pagamentos realizados</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Pendente</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCurrency(stats.totalPending)}</div>
+            <p className="text-xs text-muted-foreground">Valor a pagar</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Total Pago</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{formatCurrency(stats.totalPaid)}</div>
+            <p className="text-xs text-muted-foreground">Valor ja pago</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Filters */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Filtros</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Buscar por funcionario..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Select value={monthFilter} onValueChange={setMonthFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="Mes" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os Meses</SelectItem>
+                <SelectItem value="1">Janeiro</SelectItem>
+                <SelectItem value="2">Fevereiro</SelectItem>
+                <SelectItem value="3">Marco</SelectItem>
+                <SelectItem value="4">Abril</SelectItem>
+                <SelectItem value="5">Maio</SelectItem>
+                <SelectItem value="6">Junho</SelectItem>
+                <SelectItem value="7">Julho</SelectItem>
+                <SelectItem value="8">Agosto</SelectItem>
+                <SelectItem value="9">Setembro</SelectItem>
+                <SelectItem value="10">Outubro</SelectItem>
+                <SelectItem value="11">Novembro</SelectItem>
+                <SelectItem value="12">Dezembro</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={yearFilter} onValueChange={setYearFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="Ano" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os Anos</SelectItem>
+                {availableYears.map((year) => (
+                  <SelectItem key={year} value={year.toString()}>
+                    {year}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os Status</SelectItem>
+                <SelectItem value="pending">Pendente</SelectItem>
+                <SelectItem value="paid">Pago</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={storeFilter} onValueChange={setStoreFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="Loja" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todas as Lojas</SelectItem>
+                {mockStores.map((store) => (
+                  <SelectItem key={store.id} value={store.id}>
+                    {store.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={paymentTypeFilter} onValueChange={setPaymentTypeFilter}>
+              <SelectTrigger>
+                <SelectValue placeholder="Tipo" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Todos os Tipos</SelectItem>
+                <SelectItem value="contabil">Contabil</SelectItem>
+                <SelectItem value="nao_contabil">Nao Contabil</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Payroll Table */}
+      <Card>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Funcionario</TableHead>
+                <TableHead>Competencia</TableHead>
+                <TableHead className="hidden md:table-cell">Loja</TableHead>
+                <TableHead className="hidden lg:table-cell">Salario Bruto</TableHead>
+                <TableHead className="hidden lg:table-cell">Descontos</TableHead>
+                <TableHead>Liquido</TableHead>
+                <TableHead className="hidden sm:table-cell">Tipo</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="w-[70px]">Acoes</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {filteredPayrolls.length > 0 ? (
+                filteredPayrolls.map((payroll) => (
+                  <TableRow key={payroll.id}>
+                    <TableCell className="font-medium">{payroll.employeeName}</TableCell>
+                    <TableCell>
+                      {getMonthName(payroll.month)}/{payroll.year}
+                    </TableCell>
+                    <TableCell className="hidden md:table-cell">
+                      <Badge variant="outline">{getStoreName(payroll.storeId)}</Badge>
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell">
+                      {formatCurrency(payroll.grossSalary)}
+                    </TableCell>
+                    <TableCell className="hidden lg:table-cell text-destructive">
+                      -{formatCurrency(payroll.totalDeductions)}
+                    </TableCell>
+                    <TableCell className="font-semibold text-primary">
+                      {formatCurrency(payroll.netSalary)}
+                    </TableCell>
+                    <TableCell className="hidden sm:table-cell">
+                      <Badge variant="secondary">{paymentTypeMap[payroll.paymentType]}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={statusMap[payroll.status].variant}>
+                        {statusMap[payroll.status].label}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon">
+                            <MoreHorizontal className="h-4 w-4" />
+                            <span className="sr-only">Acoes</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => {
+                              setSelectedPayroll(payroll)
+                              setIsDetailsOpen(true)
+                            }}
+                          >
+                            <Eye className="mr-2 h-4 w-4" />
+                            Ver Holerite
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => openEdit(payroll)}>
+                            <Pencil className="mr-2 h-4 w-4" />
+                            Editar
+                          </DropdownMenuItem>
+                          {payroll.status === 'pending' && (
+                            <DropdownMenuItem onClick={() => openSettlement(payroll)}>
+                              <CreditCard className="mr-2 h-4 w-4" />
+                              Registrar Quitacao
+                            </DropdownMenuItem>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : (
+                <TableRow>
+                  <TableCell colSpan={9} className="h-24 text-center">
+                    Nenhum registro encontrado.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      {/* Settlement Dialog */}
+      <Dialog open={isSettlementOpen} onOpenChange={setIsSettlementOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Registrar Quitacao</DialogTitle>
+            <DialogDescription>
+              Informe os dados do pagamento de {selectedPayroll?.employeeName}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="settlementDate">Data da Quitacao</Label>
+              <Input
+                id="settlementDate"
+                type="date"
+                value={settlementForm.date}
+                onChange={(e) => setSettlementForm({ ...settlementForm, date: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="settlementLocation">Local da Quitacao</Label>
+              <Select
+                value={settlementForm.location}
+                onValueChange={(value) => setSettlementForm({ ...settlementForm, location: value })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o local" />
+                </SelectTrigger>
+                <SelectContent>
+                  {settlementLocations.map((location) => (
+                    <SelectItem key={location} value={location}>
+                      {location}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {selectedPayroll && (
+              <div className="bg-muted p-4 rounded-lg">
+                <p className="text-sm text-muted-foreground">Valor a ser pago:</p>
+                <p className="text-2xl font-bold text-primary">{formatCurrency(selectedPayroll.netSalary)}</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsSettlementOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleMarkAsPaid} disabled={!settlementForm.location}>
+              Confirmar Pagamento
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payroll Details Dialog */}
+      <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Holerite</DialogTitle>
+            <DialogDescription>Detalhes do pagamento</DialogDescription>
+          </DialogHeader>
+          {selectedPayroll && (
+            <div className="space-y-4">
+              <div className="text-center border-b pb-4">
+                <h3 className="font-semibold text-lg">Onda Calcados</h3>
+                <p className="text-sm text-muted-foreground">
+                  Holerite - {getMonthName(selectedPayroll.month)}/{selectedPayroll.year}
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-muted-foreground">Funcionario</p>
+                  <p className="font-medium">{selectedPayroll.employeeName}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Loja</p>
+                  <p className="font-medium">{getStoreName(selectedPayroll.storeId)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Cargo</p>
+                  <p className="font-medium">{getPositionName(selectedPayroll.positionId)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Tipo</p>
+                  <Badge variant="secondary">{paymentTypeMap[selectedPayroll.paymentType]}</Badge>
+                </div>
+              </div>
+
+              <Separator />
+
+<div className="space-y-2">
+  <h4 className="font-medium text-sm text-green-600">Proventos</h4>
+  <div className="flex justify-between text-sm">
+  <span>Salario Base</span>
+  <span>{formatCurrency(selectedPayroll.baseSalary)}</span>
+  </div>
+  {selectedPayroll.commissions > 0 && (
+  <div className="flex justify-between text-sm">
+  <span>Comissoes</span>
+  <span>{formatCurrency(selectedPayroll.commissions)}</span>
+  </div>
+  )}
+  {/* Lancamentos Manuais - Proventos */}
+  {selectedPayroll.customEvents?.filter(e => e.type === 'provento').map((event) => (
+  <div key={event.id} className="flex justify-between text-sm">
+  <span>{event.description}</span>
+  <span>{formatCurrency(event.value)}</span>
+  </div>
+  ))}
+  <div className="flex justify-between font-medium border-t pt-2">
+  <span>Total Proventos</span>
+  <span className="text-green-600">{formatCurrency(selectedPayroll.grossSalary)}</span>
+  </div>
+  </div>
+  
+  <Separator />
+  
+  <div className="space-y-2">
+  <h4 className="font-medium text-sm text-destructive">Descontos</h4>
+  {selectedPayroll.employeePurchases > 0 && (
+  <div className="flex justify-between text-sm">
+  <span>Compras</span>
+  <span>-{formatCurrency(selectedPayroll.employeePurchases)}</span>
+  </div>
+  )}
+  {selectedPayroll.vouchers > 0 && (
+  <div className="flex justify-between text-sm">
+  <span>Vales</span>
+  <span>-{formatCurrency(selectedPayroll.vouchers)}</span>
+  </div>
+  )}
+  {selectedPayroll.advances > 0 && (
+  <div className="flex justify-between text-sm">
+  <span>Adiantamento</span>
+  <span>-{formatCurrency(selectedPayroll.advances)}</span>
+  </div>
+  )}
+  {selectedPayroll.inss > 0 && (
+  <div className="flex justify-between text-sm">
+  <span>INSS</span>
+  <span>-{formatCurrency(selectedPayroll.inss)}</span>
+  </div>
+  )}
+  {/* Lancamentos Manuais - Descontos */}
+  {selectedPayroll.customEvents?.filter(e => e.type === 'desconto').map((event) => (
+  <div key={event.id} className="flex justify-between text-sm">
+  <span>{event.description}</span>
+  <span>-{formatCurrency(event.value)}</span>
+  </div>
+  ))}
+  <div className="flex justify-between font-medium border-t pt-2">
+  <span>Total Descontos</span>
+  <span className="text-destructive">-{formatCurrency(selectedPayroll.totalDeductions)}</span>
+  </div>
+  </div>
+  
+  <Separator />
+  
+  <div className="space-y-2">
+  <h4 className="font-medium text-sm text-muted-foreground">Informativo (nao descontado)</h4>
+  <div className="flex justify-between text-sm">
+  <span>FGTS (8%) - Base de Calculo</span>
+  <span>{formatCurrency(selectedPayroll.fgts)}</span>
+  </div>
+  <p className="text-xs text-muted-foreground italic">O FGTS e apenas informativo e nao e descontado do salario liquido.</p>
+  </div>
+
+              <Separator />
+
+              <div className="flex justify-between items-center text-lg font-bold">
+                <span>Salario Liquido</span>
+                <span className="text-primary">{formatCurrency(selectedPayroll.netSalary)}</span>
+              </div>
+
+              {selectedPayroll.status === 'paid' && selectedPayroll.settlementDate && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                  <p className="text-sm font-medium text-green-800">Pagamento Quitado</p>
+                  <p className="text-sm text-green-600">
+                    Data: {new Date(selectedPayroll.settlementDate).toLocaleDateString('pt-BR')}
+                  </p>
+                  {selectedPayroll.settlementLocation && (
+                    <p className="text-sm text-green-600">
+                      Local: {selectedPayroll.settlementLocation}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Payroll Dialog */}
+      <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Editar Folha de Pagamento</DialogTitle>
+            <DialogDescription>
+              Atualize os valores de {selectedPayroll?.employeeName}
+            </DialogDescription>
+          </DialogHeader>
+          {selectedPayroll && (
+            <div className="space-y-4">
+              <div className="bg-muted p-3 rounded-lg">
+                <p className="text-sm text-muted-foreground">Salario Base</p>
+                <p className="text-lg font-semibold">{formatCurrency(selectedPayroll.baseSalary)}</p>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="edit-commissions">Comissoes (R$)</Label>
+                  <Input
+                    id="edit-commissions"
+                    type="number"
+                    step="0.01"
+                    value={editForm.commissions}
+                    onChange={(e) => setEditForm({ ...editForm, commissions: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-purchases">Compras (R$)</Label>
+                  <Input
+                    id="edit-purchases"
+                    type="number"
+                    step="0.01"
+                    value={editForm.employeePurchases}
+                    onChange={(e) => setEditForm({ ...editForm, employeePurchases: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-vouchers">Vales (R$)</Label>
+                  <Input
+                    id="edit-vouchers"
+                    type="number"
+                    step="0.01"
+                    value={editForm.vouchers}
+                    onChange={(e) => setEditForm({ ...editForm, vouchers: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-advances">Adiantamento (R$)</Label>
+                  <Input
+                    id="edit-advances"
+                    type="number"
+                    step="0.01"
+                    value={editForm.advances}
+                    onChange={(e) => setEditForm({ ...editForm, advances: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-inss">INSS (R$)</Label>
+                  <Input
+                    id="edit-inss"
+                    type="number"
+                    step="0.01"
+                    value={editForm.inss}
+                    onChange={(e) => setEditForm({ ...editForm, inss: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="edit-fgts">FGTS (R$)</Label>
+                  <Input
+                    id="edit-fgts"
+                    type="number"
+                    step="0.01"
+                    value={editForm.fgts}
+                    onChange={(e) => setEditForm({ ...editForm, fgts: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Classificacao</Label>
+                <Select
+                  value={editForm.paymentType}
+                  onValueChange={(value: 'contabil' | 'nao_contabil') => setEditForm({ ...editForm, paymentType: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="contabil">Contabil</SelectItem>
+                    <SelectItem value="nao_contabil">Nao Contabil</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <Separator />
+
+              {/* Custom Events Section */}
+              <div className="space-y-3">
+                <Label className="text-base font-medium">Eventos Customizados</Label>
+                <p className="text-xs text-muted-foreground">Adicione proventos ou descontos extras (ex: Gratificacao, Quebra de Caixa)</p>
+                
+                {/* Add Event Form */}
+                <div className="grid gap-2 md:grid-cols-4 items-end">
+                  <div className="space-y-1 md:col-span-2">
+                    <Label className="text-xs">Descricao</Label>
+                    <Input
+                      placeholder="Ex: Gratificacao, Quebra de Caixa..."
+                      value={newEventForm.description}
+                      onChange={(e) => setNewEventForm({ ...newEventForm, description: e.target.value })}
+                      className="h-9"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Tipo</Label>
+                    <Select
+                      value={newEventForm.type}
+                      onValueChange={(value: 'provento' | 'desconto') => setNewEventForm({ ...newEventForm, type: value })}
+                    >
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="provento">Provento (+)</SelectItem>
+                        <SelectItem value="desconto">Desconto (-)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="flex gap-1">
+                    <div className="space-y-1 flex-1">
+                      <Label className="text-xs">Valor (R$)</Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        value={newEventForm.value}
+                        onChange={(e) => setNewEventForm({ ...newEventForm, value: e.target.value })}
+                        className="h-9"
+                      />
+                    </div>
+                    <Button 
+                      type="button" 
+                      size="icon" 
+                      className="h-9 w-9 mt-5"
+                      onClick={handleAddEvent}
+                      disabled={!newEventForm.description || !newEventForm.value}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Events List */}
+                {customEvents.length > 0 && (
+                  <div className="space-y-2 border rounded-lg p-3">
+                    {customEvents.map((event) => (
+                      <div key={event.id} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <Badge variant={event.type === 'provento' ? 'default' : 'destructive'} className="text-xs">
+                            {event.type === 'provento' ? '+' : '-'}
+                          </Badge>
+                          <span>{event.description}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={event.type === 'provento' ? 'text-green-600' : 'text-destructive'}>
+                            {event.type === 'provento' ? '+' : '-'}{formatCurrency(event.value)}
+                          </span>
+                          <Button 
+                            type="button" 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6"
+                            onClick={() => handleRemoveEvent(event.id)}
+                          >
+                            <Trash2 className="h-3 w-3 text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              {/* Preview */}
+              {(() => {
+                const calc = calculatePayroll(selectedPayroll.baseSalary, editForm, customEvents)
+                return (
+                  <div className="bg-muted p-4 rounded-lg space-y-2">
+                    <p className="text-sm font-medium">Previa do Calculo:</p>
+                    <div className="text-sm space-y-1">
+                      <div className="flex justify-between">
+                        <span>Bruto (Base + Comissao + Proventos)</span>
+                        <span>{formatCurrency(calc.grossSalary)}</span>
+                      </div>
+                      <div className="flex justify-between text-destructive">
+                        <span>Descontos</span>
+                        <span>-{formatCurrency(calc.totalDeductions)}</span>
+                      </div>
+                      <div className="flex justify-between font-bold text-primary border-t pt-1">
+                        <span>Liquido</span>
+                        <span>{formatCurrency(calc.netSalary)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsEditOpen(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleSaveEdit} disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                'Salvar'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Payroll Dialog */}
+      <Dialog open={isNewOpen} onOpenChange={setIsNewOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="pb-4 border-b">
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <DollarSign className="h-5 w-5 text-primary" />
+              Nova Folha de Pagamento
+            </DialogTitle>
+            <DialogDescription>
+              Preencha os dados abaixo para criar uma nova folha de pagamento
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-6 py-4 md:grid-cols-2">
+            {/* Left Column - Employee & Period */}
+            <div className="space-y-6">
+              {/* Employee Selection Card */}
+              <div className="rounded-lg border bg-card p-4 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">1</span>
+                  Dados do Funcionario
+                </div>
+                
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Label>Funcionario *</Label>
+                    <Select
+                      value={newForm.employeeId}
+                      onValueChange={(value) => setNewForm({ ...newForm, employeeId: value })}
+                    >
+                      <SelectTrigger className="h-11">
+                        <SelectValue placeholder="Selecione o funcionario" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {activeEmployees.map((emp) => (
+                          <SelectItem key={emp.id} value={emp.id}>
+                            <div className="flex flex-col">
+                              <span className="font-medium">{emp.name}</span>
+                              <span className="text-xs text-muted-foreground">{getStoreName(emp.storeId)} - {getPositionName(emp.positionId)}</span>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {newForm.employeeId && (
+                    <div className="rounded-md bg-muted/50 p-3 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Salario Base:</span>
+                        <span className="font-semibold">{formatCurrency(getBaseSalary(mockEmployees.find(e => e.id === newForm.employeeId)?.positionId || ''))}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid gap-3 grid-cols-2">
+                    <div className="space-y-2">
+                      <Label>Competencia (Mes)</Label>
+                      <Select
+                        value={newForm.month.toString()}
+                        onValueChange={(value) => setNewForm({ ...newForm, month: parseInt(value) })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {months.map((month) => (
+                            <SelectItem key={month.value} value={month.value.toString()}>
+                              {month.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Ano</Label>
+                      <Input
+                        type="number"
+                        value={newForm.year}
+                        onChange={(e) => setNewForm({ ...newForm, year: parseInt(e.target.value) })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Classificacao</Label>
+                    <Select
+                      value={newForm.paymentType}
+                      onValueChange={(value: 'contabil' | 'nao_contabil') => setNewForm({ ...newForm, paymentType: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="contabil">Contabil</SelectItem>
+                        <SelectItem value="nao_contabil">Nao Contabil</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Proventos Card */}
+              <div className="rounded-lg border bg-card p-4 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-green-600">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-green-100 text-green-700 text-xs font-bold">+</span>
+                  Proventos
+                </div>
+                
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Comissoes</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        className="pl-10"
+                        value={newForm.commissions}
+                        onChange={(e) => setNewForm({ ...newForm, commissions: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Right Column - Deductions & Events */}
+            <div className="space-y-6">
+              {/* Descontos Card */}
+              <div className="rounded-lg border bg-card p-4 space-y-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-destructive">
+                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive/10 text-destructive text-xs font-bold">-</span>
+                  Descontos
+                </div>
+                
+                <div className="grid gap-3 grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-sm">Compras Func.</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        className="pl-10"
+                        value={newForm.employeePurchases}
+                        onChange={(e) => setNewForm({ ...newForm, employeePurchases: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm">Vales</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        className="pl-10"
+                        value={newForm.vouchers}
+                        onChange={(e) => setNewForm({ ...newForm, vouchers: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm">Adiantamento</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        className="pl-10"
+                        value={newForm.advances}
+                        onChange={(e) => setNewForm({ ...newForm, advances: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-sm">INSS</Label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        className="pl-10"
+                        value={newForm.inss}
+                        onChange={(e) => setNewForm({ ...newForm, inss: e.target.value })}
+                      />
+                    </div>
+                  </div>
+                </div>
+                
+                <Separator />
+                
+                <div className="space-y-2">
+                  <Label className="text-sm text-muted-foreground">FGTS (Informativo - nao desconta)</Label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      placeholder="0,00"
+                      className="pl-10 bg-muted/30"
+                      value={newForm.fgts}
+                      onChange={(e) => setNewForm({ ...newForm, fgts: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Lancamentos Manuais Card */}
+              <div className="rounded-lg border bg-card p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-bold">+/-</span>
+                    Lancamentos Manuais
+                  </div>
+                </div>
+                
+                {/* Add Event Form */}
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <Input
+                      placeholder="Descricao (Ex: Premio, Uniforme...)"
+                      value={newPayrollEventForm.description}
+                      onChange={(e) => setNewPayrollEventForm({ ...newPayrollEventForm, description: e.target.value })}
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <Select
+                      value={newPayrollEventForm.type}
+                      onValueChange={(value: 'provento' | 'desconto') => setNewPayrollEventForm({ ...newPayrollEventForm, type: value })}
+                    >
+                      <SelectTrigger className="w-[140px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="provento">Provento (+)</SelectItem>
+                        <SelectItem value="desconto">Desconto (-)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="relative flex-1">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="0,00"
+                        className="pl-10"
+                        value={newPayrollEventForm.value}
+                        onChange={(e) => setNewPayrollEventForm({ ...newPayrollEventForm, value: e.target.value })}
+                      />
+                    </div>
+                    <Button 
+                      type="button" 
+                      size="icon"
+                      onClick={handleAddNewPayrollEvent}
+                      disabled={!newPayrollEventForm.description || !newPayrollEventForm.value}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Events List */}
+                {newPayrollEvents.length > 0 && (
+                  <div className="space-y-2 pt-2 border-t">
+                    {newPayrollEvents.map((event) => (
+                      <div key={event.id} className="flex items-center justify-between text-sm py-1.5">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-1.5 h-1.5 rounded-full ${event.type === 'provento' ? 'bg-green-500' : 'bg-destructive'}`} />
+                          <span className="text-muted-foreground">{event.description}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className={event.type === 'provento' ? 'text-green-600 font-medium' : 'text-destructive font-medium'}>
+                            {event.type === 'provento' ? '+' : '-'}{formatCurrency(event.value)}
+                          </span>
+                          <Button 
+                            type="button" 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-6 w-6 hover:bg-destructive/10"
+                            onClick={() => handleRemoveNewPayrollEvent(event.id)}
+                          >
+                            <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Live Preview Footer */}
+          {newForm.employeeId && (
+            <div className="rounded-lg border-2 border-primary/20 bg-primary/5 p-4 mt-2">
+              <div className="flex items-center justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm text-muted-foreground">Previa do Salario Liquido</p>
+                  <p className="text-xs text-muted-foreground">
+                    {months.find(m => m.value === newForm.month)?.label} / {newForm.year}
+                  </p>
+                </div>
+                <div className="text-right">
+                  <p className="text-2xl font-bold text-primary">
+                    {formatCurrency(
+                      calculatePayroll(
+                        getBaseSalary(mockEmployees.find(e => e.id === newForm.employeeId)?.positionId || ''),
+                        newForm,
+                        newPayrollEvents
+                      ).netSalary
+                    )}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2 pt-4 border-t">
+            <Button 
+              variant="outline" 
+              onClick={() => { 
+                setIsNewOpen(false); 
+                setNewPayrollEvents([]); 
+                setNewPayrollEventForm({ description: '', type: 'provento', value: '' }); 
+              }}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleCreatePayroll} disabled={isSubmitting || !newForm.employeeId}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Criando...
+                </>
+              ) : (
+                'Criar Folha'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
