@@ -23,6 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
 import {
   Dialog,
   DialogContent,
@@ -59,6 +61,7 @@ export default function RescisoesPage() {
   const [isDetailsOpen, setIsDetailsOpen] = useState(false)
   const [isDeleteOpen, setIsDeleteOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
   const { toast } = useToast()
 
   const [formData, setFormData] = useState({
@@ -373,21 +376,43 @@ export default function RescisoesPage() {
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="employee">Funcionario *</Label>
-              <Select
-                value={formData.employeeId}
-                onValueChange={(value) => setFormData({ ...formData, employeeId: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione o funcionario" />
-                </SelectTrigger>
-                <SelectContent>
-                  {activeEmployees.map((employee) => (
-                    <SelectItem key={employee.id} value={employee.id}>
-                      {employee.name} - {getStoreName(employee.storeId)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <Popover open={isEmployeeOpen} onOpenChange={setIsEmployeeOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    role="combobox"
+                    aria-expanded={isEmployeeOpen}
+                    className="w-full justify-between"
+                  >
+                    {formData.employeeId
+                      ? activeEmployees.find(e => e.id === formData.employeeId)?.name
+                      : 'Selecione o funcionario'}
+                    <Search className="h-4 w-4 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+                  <Command>
+                    <CommandInput placeholder="Buscar funcionario..." />
+                    <CommandList>
+                      <CommandEmpty>Nenhum funcionario encontrado.</CommandEmpty>
+                      <CommandGroup>
+                        {activeEmployees.map((employee) => (
+                          <CommandItem
+                            key={employee.id}
+                            value={`${employee.name} ${getStoreName(employee.storeId)}`}
+                            onSelect={() => {
+                              setFormData({ ...formData, employeeId: employee.id })
+                              setIsEmployeeOpen(false)
+                            }}
+                          >
+                            {employee.name} - {getStoreName(employee.storeId)}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
             </div>
             <div className="space-y-2">
               <Label htmlFor="exitDate">Data de Saida *</Label>

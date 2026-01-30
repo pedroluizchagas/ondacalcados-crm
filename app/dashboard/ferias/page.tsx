@@ -23,6 +23,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
 import {
   Dialog,
   DialogContent,
@@ -50,6 +52,7 @@ export default function FeriasPage() {
   const [storeFilter, setStoreFilter] = useState<string>('all')
   const [isFormOpen, setIsFormOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
   const { toast } = useToast()
 
   const [formData, setFormData] = useState({
@@ -203,35 +206,55 @@ export default function FeriasPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="employee">Funcionario</Label>
-                <Select
-                  value={formData.employeeId}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, employeeId: value })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Selecione o funcionario" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {employeesWithAlerts.map((emp) => (
-                      <SelectItem key={emp.id} value={emp.id}>
-                        <div className="flex items-center gap-2">
-                          <span>{emp.name}</span>
-                          <span className="text-muted-foreground">- {getStoreName(emp.storeId)}</span>
-                          {emp.vacationAlert.level === 'critical' && (
-                            <AlertTriangle className="h-4 w-4 text-destructive" />
-                          )}
-                          {emp.vacationAlert.level === 'attention' && (
-                            <AlertCircle className="h-4 w-4 text-yellow-600" />
-                          )}
-                          {emp.vacationAlert.level === 'planning' && (
-                            <Info className="h-4 w-4 text-blue-600" />
-                          )}
-                        </div>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Popover open={isEmployeeOpen} onOpenChange={setIsEmployeeOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={isEmployeeOpen}
+                      className="w-full justify-between"
+                    >
+                      {formData.employeeId
+                        ? employeesWithAlerts.find(e => e.id === formData.employeeId)?.name
+                        : 'Selecione o funcionario'}
+                      <Search className="h-4 w-4 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+                    <Command>
+                      <CommandInput placeholder="Buscar funcionario..." />
+                      <CommandList>
+                        <CommandEmpty>Nenhum funcionario encontrado.</CommandEmpty>
+                        <CommandGroup>
+                          {employeesWithAlerts.map((emp) => (
+                            <CommandItem
+                              key={emp.id}
+                              value={`${emp.name} ${getStoreName(emp.storeId)} ${emp.vacationAlert.level}`}
+                              onSelect={() => {
+                                setFormData({ ...formData, employeeId: emp.id })
+                                setIsEmployeeOpen(false)
+                              }}
+                            >
+                              <div className="flex items-center gap-2">
+                                <span>{emp.name}</span>
+                                <span className="text-muted-foreground">- {getStoreName(emp.storeId)}</span>
+                                {emp.vacationAlert.level === 'critical' && (
+                                  <AlertTriangle className="h-4 w-4 text-destructive" />
+                                )}
+                                {emp.vacationAlert.level === 'attention' && (
+                                  <AlertCircle className="h-4 w-4 text-yellow-600" />
+                                )}
+                                {emp.vacationAlert.level === 'planning' && (
+                                  <Info className="h-4 w-4 text-blue-600" />
+                                )}
+                              </div>
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
