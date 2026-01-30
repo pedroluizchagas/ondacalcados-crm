@@ -24,6 +24,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
 import {
   Dialog,
   DialogContent,
@@ -98,6 +100,7 @@ export default function FolhaPagamentoPage() {
   const [isNewOpen, setIsNewOpen] = useState(false)
   const [isSettlementOpen, setIsSettlementOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const { toast } = useToast()
 
@@ -604,7 +607,7 @@ const handleCreatePayroll = async () => {
             <FileSpreadsheet className="h-5 w-5 text-muted-foreground mt-0.5" />
             <div className="text-sm">
               <p className="font-medium">Formato do CSV para importacao:</p>
-              <p className="text-muted-foreground">Colunas esperadas: Nome, Comissao, Compras, Vales, INSS, FGTS</p>
+              <p className="text-muted-foreground">Colunas esperadas: Nome, Comissao, Compras, Imposto de Renda, INSS, FGTS</p>
               <p className="text-muted-foreground">O sistema mapeia automaticamente os dados pelo nome do funcionario.</p>
             </div>
           </div>
@@ -963,7 +966,7 @@ const handleCreatePayroll = async () => {
   )}
   {selectedPayroll.vouchers > 0 && (
   <div className="flex justify-between text-sm">
-  <span>Vales</span>
+                      <span>Imposto de Renda</span>
   <span>-{formatCurrency(selectedPayroll.vouchers)}</span>
   </div>
   )}
@@ -1066,7 +1069,7 @@ const handleCreatePayroll = async () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="edit-vouchers">Vales (R$)</Label>
+                  <Label htmlFor="edit-vouchers">Imposto de Renda (R$)</Label>
                   <Input
                     id="edit-vouchers"
                     type="number"
@@ -1278,24 +1281,46 @@ const handleCreatePayroll = async () => {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Funcionario *</Label>
-                  <Select
-                    value={newForm.employeeId}
-                    onValueChange={(value) => setNewForm({ ...newForm, employeeId: value })}
-                  >
-                    <SelectTrigger className="h-11 w-full">
-                      <SelectValue placeholder="Selecione o funcionario" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {activeEmployees.map((emp) => (
-                        <SelectItem key={emp.id} value={emp.id}>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{emp.name}</span>
-                            <span className="text-xs text-muted-foreground">{getStoreName(emp.storeId)} - {getPositionName(emp.positionId)}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Popover open={isEmployeeOpen} onOpenChange={setIsEmployeeOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        aria-expanded={isEmployeeOpen}
+                        className="h-11 w-full justify-between"
+                      >
+                        {newForm.employeeId
+                          ? mockEmployees.find(e => e.id === newForm.employeeId)?.name
+                          : 'Selecione o funcionario'}
+                        <Search className="h-4 w-4 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0">
+                      <Command>
+                        <CommandInput placeholder="Buscar funcionario..." />
+                        <CommandList>
+                          <CommandEmpty>Nenhum funcionario encontrado.</CommandEmpty>
+                          <CommandGroup>
+                            {activeEmployees.map((emp) => (
+                              <CommandItem
+                                key={emp.id}
+                                value={`${emp.name} ${getStoreName(emp.storeId)} ${getPositionName(emp.positionId)}`}
+                                onSelect={() => {
+                                  setNewForm({ ...newForm, employeeId: emp.id })
+                                  setIsEmployeeOpen(false)
+                                }}
+                              >
+                                <div className="flex flex-col">
+                                  <span className="font-medium">{emp.name}</span>
+                                  <span className="text-xs text-muted-foreground">{getStoreName(emp.storeId)} - {getPositionName(emp.positionId)}</span>
+                                </div>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
                 </div>
 
                 {newForm.employeeId && (
@@ -1412,7 +1437,7 @@ const handleCreatePayroll = async () => {
                     </InputGroup>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-sm">Vales</Label>
+                    <Label className="text-sm">Imposto de Renda</Label>
                     <InputGroup>
                       <InputGroupAddon>
                         <InputGroupText>R$</InputGroupText>

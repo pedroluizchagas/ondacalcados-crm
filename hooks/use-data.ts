@@ -22,6 +22,7 @@ const fetcher = async (url: string) => {
 export function useStores() {
   const { data, error, isLoading, mutate } = useSWR<Store[]>('/api/stores', fetcher)
   return {
+    data: data || [],
     stores: data || [],
     isLoading,
     error,
@@ -33,6 +34,7 @@ export function useStores() {
 export function usePositions() {
   const { data, error, isLoading, mutate } = useSWR<Position[]>('/api/positions', fetcher)
   return {
+    data: data || [],
     positions: data || [],
     isLoading,
     error,
@@ -44,6 +46,7 @@ export function usePositions() {
 export function useEmployees() {
   const { data, error, isLoading, mutate } = useSWR<Employee[]>('/api/employees', fetcher)
   return {
+    data: data || [],
     employees: data || [],
     isLoading,
     error,
@@ -57,6 +60,7 @@ export function useEmployee(id: string | null) {
     fetcher
   )
   return {
+    data: data,
     employee: data,
     isLoading,
     error,
@@ -68,6 +72,7 @@ export function useEmployee(id: string | null) {
 export function useVacations() {
   const { data, error, isLoading, mutate } = useSWR<Vacation[]>('/api/vacations', fetcher)
   return {
+    data: data || [],
     vacations: data || [],
     isLoading,
     error,
@@ -82,6 +87,7 @@ export function useMedicalCertificates() {
     fetcher
   )
   return {
+    data: data || [],
     certificates: data || [],
     isLoading,
     error,
@@ -93,6 +99,7 @@ export function useMedicalCertificates() {
 export function useResignations() {
   const { data, error, isLoading, mutate } = useSWR<Resignation[]>('/api/resignations', fetcher)
   return {
+    data: data || [],
     resignations: data || [],
     isLoading,
     error,
@@ -104,6 +111,7 @@ export function useResignations() {
 export function usePayroll() {
   const { data, error, isLoading, mutate } = useSWR<PayrollItem[]>('/api/payroll', fetcher)
   return {
+    data: data || [],
     payrolls: data || [],
     isLoading,
     error,
