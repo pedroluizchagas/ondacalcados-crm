@@ -686,6 +686,8 @@ export async function updatePayrollItem(id: string, payroll: Partial<PayrollItem
   if (payroll.status !== undefined) updateData.status = payroll.status
   if (payroll.paymentDate !== undefined) updateData.payment_date = payroll.paymentDate
   if (payroll.customEvents !== undefined) updateData.custom_events = payroll.customEvents
+  if (payroll.settlementDate !== undefined) updateData.settlement_date = payroll.settlementDate
+  if (payroll.settlementLocation !== undefined) updateData.settlement_location = payroll.settlementLocation
 
   const { data, error } = await supabase
     .from('payroll_items')
@@ -716,6 +718,8 @@ export async function updatePayrollItem(id: string, payroll: Partial<PayrollItem
     paymentType: data.payment_type,
     status: data.status,
     paymentDate: data.payment_date,
+    settlementDate: data.settlement_date,
+    settlementLocation: data.settlement_location,
     customEvents: data.custom_events,
   }
 }

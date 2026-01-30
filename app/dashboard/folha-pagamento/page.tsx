@@ -2,8 +2,8 @@
 
 import React from "react"
 
-import { useState, useMemo, useRef } from 'react'
-import { mockPayroll, mockEmployees, mockStores, getStoreName, getPositionName, getBaseSalary } from '@/lib/mock-data'
+import { useState, useMemo, useRef, useEffect } from 'react'
+import { usePayroll, useEmployees, useStores, usePositions, updatePayrollItem as apiUpdatePayrollItem, createPayrollItem as apiCreatePayrollItem } from '@/hooks/use-data'
 import type { PayrollItem } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,7 +43,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { InputGroup, InputGroupAddon, InputGroupText, InputGroupInput } from '@/components/ui/input-group'
 import { Separator } from '@/components/ui/separator'
-import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, CreditCard, Pencil, Plus, Loader2, Upload, FileSpreadsheet, Printer, Trash2 } from 'lucide-react'
+import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, CreditCard, Pencil, Plus, Loader2, Upload, FileText, Printer, Trash2 } from 'lucide-react'
 import type { PayrollEvent } from '@/types'
 import { useToast } from '@/hooks/use-toast'
 
@@ -87,7 +87,11 @@ const months = [
 ]
 
 export default function FolhaPagamentoPage() {
-  const [payrolls, setPayrolls] = useState<ExtendedPayrollItem[]>(mockPayroll)
+  const { payrolls: serverPayrolls, isLoading: loadingPayrolls, mutate: mutatePayrolls } = usePayroll()
+  const { employees } = useEmployees()
+  const { stores } = useStores()
+  const { positions } = usePositions()
+  const [payrolls, setPayrolls] = useState<ExtendedPayrollItem[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [storeFilter, setStoreFilter] = useState<string>('all')
@@ -101,8 +105,30 @@ export default function FolhaPagamentoPage() {
   const [isSettlementOpen, setIsSettlementOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const filePdfInputRef = useRef<HTMLInputElement>(null)
+  const [isImportingPdf, setIsImportingPdf] = useState(false)
   const { toast } = useToast()
+
+  useEffect(() => {
+    if (serverPayrolls && Array.isArray(serverPayrolls)) {
+      setPayrolls(serverPayrolls as ExtendedPayrollItem[])
+    }
+  }, [serverPayrolls])
+
+  const getStoreName = (storeId: string) => {
+    const s = stores.find(st => st.id === storeId || (st as any).id === storeId)
+    return s?.name || 'N/A'
+  }
+
+  const getPositionName = (positionId: string) => {
+    const p = positions.find(pp => pp.id === positionId || (pp as any).id === positionId)
+    return p?.name || 'N/A'
+  }
+
+  const getBaseSalary = (positionId: string) => {
+    const p = positions.find(pp => pp.id === positionId || (pp as any).id === positionId)
+    return Number((p as any)?.baseSalary || (p as any)?.base_salary || 0)
+  }
 
   // Settlement form state
   const [settlementForm, setSettlementForm] = useState({
@@ -185,8 +211,8 @@ export default function FolhaPagamentoPage() {
   }, [payrolls])
 
   const activeEmployees = useMemo(() => {
-    return mockEmployees.filter(e => e.status === 'active')
-  }, [])
+    return (employees || []).filter(e => e.status === 'active')
+  }, [employees])
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -378,22 +404,17 @@ export default function FolhaPagamentoPage() {
     setIsSettlementOpen(true)
   }
 
-  const handleMarkAsPaid = () => {
+  const handleMarkAsPaid = async () => {
     if (!selectedPayroll || !settlementForm.location) return
-    
-    setPayrolls(
-      payrolls.map((p) =>
-        p.id === selectedPayroll.id
-          ? {
-              ...p,
-              status: 'paid' as const,
-              paymentDate: settlementForm.date,
-              settlementDate: settlementForm.date,
-              settlementLocation: settlementForm.location,
-            }
-          : p
-      )
-    )
+    setIsSubmitting(true)
+    await apiUpdatePayrollItem(String(selectedPayroll.id), {
+      status: 'paid',
+      paymentDate: settlementForm.date,
+      settlementDate: settlementForm.date,
+      settlementLocation: settlementForm.location,
+    })
+    await mutatePayrolls()
+    setIsSubmitting(false)
     setIsSettlementOpen(false)
     toast({
       title: 'Pagamento registrado',
@@ -423,16 +444,12 @@ const handleSaveEdit = async () => {
     
     const calculations = calculatePayroll(selectedPayroll.baseSalary, editForm, customEvents)
     
-    setPayrolls(payrolls.map(p =>
-      p.id === selectedPayroll.id
-        ? {
-            ...p,
-            ...calculations,
-            paymentType: editForm.paymentType,
-            customEvents: customEvents.length > 0 ? [...customEvents] : undefined,
-          }
-        : p
-    ))
+    await apiUpdatePayrollItem(String(selectedPayroll.id), {
+      ...calculations,
+      paymentType: editForm.paymentType,
+      customEvents: customEvents.length > 0 ? [...customEvents] : undefined,
+    })
+    await mutatePayrolls()
     
     setIsSubmitting(false)
     setIsEditOpen(false)
@@ -449,20 +466,20 @@ const handleCreatePayroll = async () => {
     setIsSubmitting(true)
     await new Promise(resolve => setTimeout(resolve, 500))
     
-    const employee = mockEmployees.find(e => e.id === newForm.employeeId)
+    const employee = activeEmployees.find(e => e.id === newForm.employeeId)
     if (!employee) return
     
-    const baseSalary = getBaseSalary(employee.positionId)
+    const baseSalary = getBaseSalary((employee as any).positionId || (employee as any).position_id)
     const calculations = calculatePayroll(baseSalary, newForm, newPayrollEvents)
     
     const newPayroll: ExtendedPayrollItem = {
       id: (payrolls.length + 1).toString(),
       employeeId: employee.id,
-      employeeName: employee.name,
+      employeeName: (employee as any).name,
       month: newForm.month,
       year: newForm.year,
-      storeId: employee.storeId,
-      positionId: employee.positionId,
+      storeId: (employee as any).storeId || (employee as any).store_id,
+      positionId: (employee as any).positionId || (employee as any).position_id,
       baseSalary,
       ...calculations,
       paymentType: newForm.paymentType,
@@ -470,7 +487,8 @@ const handleCreatePayroll = async () => {
       customEvents: newPayrollEvents.length > 0 ? [...newPayrollEvents] : undefined,
     }
     
-    setPayrolls([...payrolls, newPayroll])
+    await apiCreatePayrollItem(newPayroll)
+    await mutatePayrolls()
     setIsSubmitting(false)
     setIsNewOpen(false)
     setNewForm({
@@ -493,76 +511,35 @@ const handleCreatePayroll = async () => {
     })
   }
 
-  // CSV Import Handler
-  const handleCSVImport = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handlePDFImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      const text = e.target?.result as string
-      const lines = text.split('\n')
-      const headers = lines[0].split(',').map(h => h.trim().toLowerCase())
-      
-      // Expected headers: nome, comissao, compras, vales, inss, fgts
-      const nameIdx = headers.findIndex(h => h.includes('nome'))
-      const commissionIdx = headers.findIndex(h => h.includes('comiss'))
-      const purchasesIdx = headers.findIndex(h => h.includes('compra'))
-      const vouchersIdx = headers.findIndex(h => h.includes('vale'))
-      const inssIdx = headers.findIndex(h => h.includes('inss'))
-      const fgtsIdx = headers.findIndex(h => h.includes('fgts'))
-
-      let importedCount = 0
-      const updatedPayrolls = [...payrolls]
-
-      for (let i = 1; i < lines.length; i++) {
-        if (!lines[i].trim()) continue
-        
-        const values = lines[i].split(',').map(v => v.trim())
-        const employeeName = nameIdx >= 0 ? values[nameIdx] : ''
-        
-        // Find matching payroll by employee name
-        const payrollIdx = updatedPayrolls.findIndex(p => 
-          p.employeeName.toLowerCase().includes(employeeName.toLowerCase()) ||
-          employeeName.toLowerCase().includes(p.employeeName.toLowerCase())
-        )
-
-        if (payrollIdx >= 0) {
-          const payroll = updatedPayrolls[payrollIdx]
-          const commissions = commissionIdx >= 0 ? parseFloat(values[commissionIdx]) || 0 : payroll.commissions
-          const employeePurchases = purchasesIdx >= 0 ? parseFloat(values[purchasesIdx]) || 0 : payroll.employeePurchases
-          const vouchers = vouchersIdx >= 0 ? parseFloat(values[vouchersIdx]) || 0 : payroll.vouchers
-          const inss = inssIdx >= 0 ? parseFloat(values[inssIdx]) || 0 : payroll.inss
-          const fgts = fgtsIdx >= 0 ? parseFloat(values[fgtsIdx]) || 0 : payroll.fgts
-
-          const grossSalary = payroll.baseSalary + commissions
-          const totalDeductions = employeePurchases + vouchers + payroll.advances + inss
-          const netSalary = grossSalary - totalDeductions
-
-          updatedPayrolls[payrollIdx] = {
-            ...payroll,
-            commissions,
-            employeePurchases,
-            vouchers,
-            inss,
-            fgts,
-            grossSalary,
-            totalDeductions,
-            netSalary,
-          }
-          importedCount++
-        }
+    setIsImportingPdf(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      if (monthFilter !== 'all') form.append('month', monthFilter)
+      if (yearFilter !== 'all') form.append('year', yearFilter)
+      const res = await fetch('/api/payroll/import-pdf', { method: 'POST', body: form })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || 'Falha ao importar PDF')
       }
-
-      setPayrolls(updatedPayrolls)
+      const data = await res.json()
+      await mutatePayrolls()
       toast({
-        title: 'CSV Importado',
-        description: `${importedCount} registro(s) atualizado(s) com sucesso.`,
+        title: 'PDF importado',
+        description: `${data.updated} atualizado(s), ${data.created} criado(s) para ${data.month}/${data.year}.`,
       })
-    }
-    reader.readAsText(file)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
+    } catch (e: any) {
+      toast({
+        title: 'Erro ao importar PDF',
+        description: e?.message || 'Verifique o arquivo e tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsImportingPdf(false)
+      if (filePdfInputRef.current) filePdfInputRef.current.value = ''
     }
   }
 
@@ -580,14 +557,14 @@ const handleCreatePayroll = async () => {
         <div className="flex gap-2 flex-wrap">
           <input
             type="file"
-            accept=".csv"
-            ref={fileInputRef}
-            onChange={handleCSVImport}
+            accept=".pdf"
+            ref={filePdfInputRef}
+            onChange={handlePDFImport}
             className="hidden"
           />
-          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
-            <Upload className="mr-2 h-4 w-4" />
-            Importar CSV
+          <Button variant="outline" onClick={() => filePdfInputRef.current?.click()} disabled={isImportingPdf}>
+            {isImportingPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            Importar PDF
           </Button>
           <Button variant="outline" onClick={handlePrintReport}>
             <Printer className="mr-2 h-4 w-4" />
@@ -600,15 +577,15 @@ const handleCreatePayroll = async () => {
         </div>
       </div>
 
-      {/* CSV Import Info */}
+      {/* PDF Import Info */}
       <Card className="bg-muted/50">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
-            <FileSpreadsheet className="h-5 w-5 text-muted-foreground mt-0.5" />
+            <FileText className="h-5 w-5 text-muted-foreground mt-0.5" />
             <div className="text-sm">
-              <p className="font-medium">Formato do CSV para importacao:</p>
-              <p className="text-muted-foreground">Colunas esperadas: Nome, Comissao, Compras, Imposto de Renda, INSS, FGTS</p>
-              <p className="text-muted-foreground">O sistema mapeia automaticamente os dados pelo nome do funcionario.</p>
+              <p className="font-medium">Importacao via PDF:</p>
+              <p className="text-muted-foreground">O arquivo deve conter nome do funcionario e valores de Comissao, Compras, Imposto de Renda, INSS e FGTS.</p>
+              <p className="text-muted-foreground">Se houver CPF no PDF, o sistema usa para vinculo. Caso contrario, usa o nome.</p>
             </div>
           </div>
         </CardContent>
@@ -726,7 +703,7 @@ const handleCreatePayroll = async () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as Lojas</SelectItem>
-                {mockStores.map((store) => (
+                {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id}>
                     {store.name}
                   </SelectItem>
@@ -773,7 +750,7 @@ const handleCreatePayroll = async () => {
                       {getMonthName(payroll.month)}/{payroll.year}
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <Badge variant="outline">{getStoreName(payroll.storeId)}</Badge>
+                      <Badge variant="outline">{getStoreName(String(payroll.storeId))}</Badge>
                     </TableCell>
                     <TableCell className="hidden lg:table-cell">
                       {formatCurrency(payroll.grossSalary)}
@@ -1290,7 +1267,7 @@ const handleCreatePayroll = async () => {
                         className="h-11 w-full justify-between"
                       >
                         {newForm.employeeId
-                          ? mockEmployees.find(e => e.id === newForm.employeeId)?.name
+                          ? ((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.name
                           : 'Selecione o funcionario'}
                         <Search className="h-4 w-4 opacity-50" />
                       </Button>
@@ -1301,18 +1278,18 @@ const handleCreatePayroll = async () => {
                         <CommandList>
                           <CommandEmpty>Nenhum funcionario encontrado.</CommandEmpty>
                           <CommandGroup>
-                            {activeEmployees.map((emp) => (
+                                {activeEmployees.map((emp) => (
                               <CommandItem
                                 key={emp.id}
-                                value={`${emp.name} ${getStoreName(emp.storeId)} ${getPositionName(emp.positionId)}`}
+                                    value={`${(emp as any).name} ${getStoreName(String((emp as any).storeId || (emp as any).store_id))} ${getPositionName(String((emp as any).positionId || (emp as any).position_id))}`}
                                 onSelect={() => {
                                   setNewForm({ ...newForm, employeeId: emp.id })
                                   setIsEmployeeOpen(false)
                                 }}
                               >
                                 <div className="flex flex-col">
-                                  <span className="font-medium">{emp.name}</span>
-                                  <span className="text-xs text-muted-foreground">{getStoreName(emp.storeId)} - {getPositionName(emp.positionId)}</span>
+                                      <span className="font-medium">{(emp as any).name}</span>
+                                      <span className="text-xs text-muted-foreground">{getStoreName(String((emp as any).storeId || (emp as any).store_id))} - {getPositionName(String((emp as any).positionId || (emp as any).position_id))}</span>
                                 </div>
                               </CommandItem>
                             ))}
@@ -1328,7 +1305,7 @@ const handleCreatePayroll = async () => {
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Salario Base</span>
                       <span className="font-semibold">
-                        {formatCurrency(getBaseSalary(mockEmployees.find(e => e.id === newForm.employeeId)?.positionId || ''))}
+                        {formatCurrency(getBaseSalary(((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.positionId || ((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.position_id || ''))}
                       </span>
                     </div>
                   </div>
@@ -1595,7 +1572,7 @@ const handleCreatePayroll = async () => {
                   <p className="text-2xl font-bold text-primary">
                     {formatCurrency(
                       calculatePayroll(
-                        getBaseSalary(mockEmployees.find(e => e.id === newForm.employeeId)?.positionId || ''),
+                        getBaseSalary(((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.positionId || ((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.position_id || ''),
                         newForm,
                         newPayrollEvents
                       ).netSalary
