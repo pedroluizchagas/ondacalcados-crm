@@ -38,7 +38,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { InputGroup, InputGroupAddon, InputGroupText, InputGroupInput } from '@/components/ui/input-group'
 import { Separator } from '@/components/ui/separator'
 import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, CreditCard, Pencil, Plus, Loader2, Upload, FileSpreadsheet, Printer, Trash2 } from 'lucide-react'
 import type { PayrollEvent } from '@/types'
@@ -269,11 +270,8 @@ export default function FolhaPagamentoPage() {
 
   // Print report
   const handlePrintReport = () => {
-    const printContent = document.getElementById('payroll-print-content')
-    if (!printContent) return
-
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) return
+    const w = window.open('', '_blank')
+    if (!w) return
 
     const filteredData = filteredPayrolls.map(p => ({
       name: p.employeeName,
@@ -284,27 +282,50 @@ export default function FolhaPagamentoPage() {
       status: statusMap[p.status].label,
     }))
 
-    printWindow.document.write(`
+    const monthLabel =
+      monthFilter === 'all'
+        ? 'Todos'
+        : months.find(m => m.value === parseInt(monthFilter, 10))?.label || monthFilter
+    const yearLabel = yearFilter === 'all' ? 'Todos' : yearFilter
+    const storeLabel = storeFilter === 'all' ? 'Todas' : getStoreName(storeFilter)
+    const statusLabel =
+      statusFilter === 'all'
+        ? 'Todos'
+        : statusMap[statusFilter as keyof typeof statusMap]?.label || statusFilter
+    const typeLabel =
+      paymentTypeFilter === 'all'
+        ? 'Todos'
+        : paymentTypeMap[paymentTypeFilter as keyof typeof paymentTypeMap] || paymentTypeFilter
+
+    w.document.write(`
       <!DOCTYPE html>
       <html>
       <head>
+        <meta charset="utf-8" />
         <title>Relatorio de Folha de Pagamento</title>
         <style>
-          body { font-family: Arial, sans-serif; padding: 20px; }
-          h1 { color: #1e40af; font-size: 24px; }
-          .info { color: #666; margin-bottom: 20px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-          th { background-color: #1e40af; color: white; }
-          tr:nth-child(even) { background-color: #f9f9f9; }
-          .total { font-weight: bold; margin-top: 20px; }
+          * { box-sizing: border-box; }
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
+          h1 { color: #1e40af; font-size: 22px; margin: 0 0 8px; }
+          .info { font-size: 12px; color: #4b5563; margin-bottom: 16px; }
+          .info p { margin: 2px 0; }
+          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; font-size: 12px; }
+          th { background-color: #1e40af; color: #ffffff; }
+          tr:nth-child(even) { background-color: #f9fafb; }
+          .totals { font-weight: bold; margin-top: 16px; font-size: 13px; }
+          .footer { margin-top: 24px; font-size: 11px; color: #6b7280; }
+          @media print {
+            body { padding: 0; }
+            .footer { position: fixed; bottom: 8px; left: 24px; right: 24px; }
+          }
         </style>
       </head>
       <body>
         <h1>Onda Calcados - Relatorio de Folha de Pagamento</h1>
         <div class="info">
           <p>Data: ${new Date().toLocaleDateString('pt-BR')}</p>
-          <p>Filtros: Loja: ${storeFilter === 'all' ? 'Todas' : getStoreName(storeFilter)} | Status: ${statusFilter === 'all' ? 'Todos' : statusMap[statusFilter as keyof typeof statusMap]?.label || statusFilter}</p>
+          <p>Filtros: Loja: ${storeLabel} | Status: ${statusLabel} | Mes: ${monthLabel} | Ano: ${yearLabel} | Tipo: ${typeLabel}</p>
         </div>
         <table>
           <thead>
@@ -330,15 +351,19 @@ export default function FolhaPagamentoPage() {
             `).join('')}
           </tbody>
         </table>
-        <div class="total">
+        <div class="totals">
           <p>Total Pendente: ${formatCurrency(stats.totalPending)}</p>
           <p>Total Pago: ${formatCurrency(stats.totalPaid)}</p>
+        </div>
+        <div class="footer">
+          Relatorio gerado pelo sistema CRM - Onda Calcados
         </div>
       </body>
       </html>
     `)
-    printWindow.document.close()
-    printWindow.print()
+    w.document.close()
+    w.focus()
+    w.print()
   }
 
   const openSettlement = (payroll: ExtendedPayrollItem) => {
@@ -1233,8 +1258,8 @@ const handleCreatePayroll = async () => {
 
       {/* New Payroll Dialog */}
       <Dialog open={isNewOpen} onOpenChange={setIsNewOpen}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader className="pb-4 border-b">
+        <DialogContent className="w-full sm:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
+          <DialogHeader className="pb-4 border-b pr-12">
             <DialogTitle className="text-xl flex items-center gap-2">
               <DollarSign className="h-5 w-5 text-primary" />
               Nova Folha de Pagamento
@@ -1244,186 +1269,192 @@ const handleCreatePayroll = async () => {
             </DialogDescription>
           </DialogHeader>
           
-          <div className="grid gap-6 py-4 md:grid-cols-2">
-            {/* Left Column - Employee & Period */}
-            <div className="space-y-6">
-              {/* Employee Selection Card */}
-              <div className="rounded-lg border bg-card p-4 space-y-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold">1</span>
-                  Dados do Funcionario
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-4">
+            <Card className="w-full">
+              <CardHeader className="pb-0">
+                <CardTitle className="text-sm">Dados do Funcionario</CardTitle>
+                <CardDescription>Selecao, competencia e classificacao</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Funcionario *</Label>
+                  <Select
+                    value={newForm.employeeId}
+                    onValueChange={(value) => setNewForm({ ...newForm, employeeId: value })}
+                  >
+                    <SelectTrigger className="h-11 w-full">
+                      <SelectValue placeholder="Selecione o funcionario" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {activeEmployees.map((emp) => (
+                        <SelectItem key={emp.id} value={emp.id}>
+                          <div className="flex flex-col">
+                            <span className="font-medium">{emp.name}</span>
+                            <span className="text-xs text-muted-foreground">{getStoreName(emp.storeId)} - {getPositionName(emp.positionId)}</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                
-                <div className="space-y-3">
+
+                {newForm.employeeId && (
+                  <div className="rounded-md border bg-muted/40 p-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Salario Base</span>
+                      <span className="font-semibold">
+                        {formatCurrency(getBaseSalary(mockEmployees.find(e => e.id === newForm.employeeId)?.positionId || ''))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                   <div className="space-y-2">
-                    <Label>Funcionario *</Label>
+                    <Label>Competencia (Mes)</Label>
                     <Select
-                      value={newForm.employeeId}
-                      onValueChange={(value) => setNewForm({ ...newForm, employeeId: value })}
+                      value={newForm.month.toString()}
+                      onValueChange={(value) => setNewForm({ ...newForm, month: parseInt(value) })}
                     >
-                      <SelectTrigger className="h-11">
-                        <SelectValue placeholder="Selecione o funcionario" />
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {activeEmployees.map((emp) => (
-                          <SelectItem key={emp.id} value={emp.id}>
-                            <div className="flex flex-col">
-                              <span className="font-medium">{emp.name}</span>
-                              <span className="text-xs text-muted-foreground">{getStoreName(emp.storeId)} - {getPositionName(emp.positionId)}</span>
-                            </div>
+                        {months.map((month) => (
+                          <SelectItem key={month.value} value={month.value.toString()}>
+                            {month.label}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </div>
-
-                  {newForm.employeeId && (
-                    <div className="rounded-md bg-muted/50 p-3 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Salario Base:</span>
-                        <span className="font-semibold">{formatCurrency(getBaseSalary(mockEmployees.find(e => e.id === newForm.employeeId)?.positionId || ''))}</span>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="grid gap-3 grid-cols-2">
-                    <div className="space-y-2">
-                      <Label>Competencia (Mes)</Label>
-                      <Select
-                        value={newForm.month.toString()}
-                        onValueChange={(value) => setNewForm({ ...newForm, month: parseInt(value) })}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {months.map((month) => (
-                            <SelectItem key={month.value} value={month.value.toString()}>
-                              {month.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Ano</Label>
-                      <Input
-                        type="number"
-                        value={newForm.year}
-                        onChange={(e) => setNewForm({ ...newForm, year: parseInt(e.target.value) })}
-                      />
-                    </div>
-                  </div>
-
                   <div className="space-y-2">
-                    <Label>Classificacao</Label>
-                    <Select
-                      value={newForm.paymentType}
-                      onValueChange={(value: 'contabil' | 'nao_contabil') => setNewForm({ ...newForm, paymentType: value })}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="contabil">Contabil</SelectItem>
-                        <SelectItem value="nao_contabil">Nao Contabil</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <Label>Ano</Label>
+                    <Input
+                      type="number"
+                      value={newForm.year}
+                      onChange={(e) => setNewForm({ ...newForm, year: parseInt(e.target.value) })}
+                      className="w-full"
+                    />
                   </div>
                 </div>
-              </div>
 
-              {/* Proventos Card */}
-              <div className="rounded-lg border bg-card p-4 space-y-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-green-600">
+                <div className="space-y-2">
+                  <Label>Classificacao</Label>
+                  <Select
+                    value={newForm.paymentType}
+                    onValueChange={(value: 'contabil' | 'nao_contabil') => setNewForm({ ...newForm, paymentType: value })}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="contabil">Contabil</SelectItem>
+                      <SelectItem value="nao_contabil">Nao Contabil</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="w-full">
+              <CardHeader className="pb-0">
+                <CardTitle className="flex items-center gap-2 text-green-600">
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-green-100 text-green-700 text-xs font-bold">+</span>
                   Proventos
+                </CardTitle>
+                <CardDescription>Valores que aumentam o bruto</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-2">
+                  <Label className="text-sm">Comissoes</Label>
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <InputGroupText>R$</InputGroupText>
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      type="number"
+                      step="0.01"
+                      placeholder="0,00"
+                      value={newForm.commissions}
+                      onChange={(e) => setNewForm({ ...newForm, commissions: e.target.value })}
+                    />
+                  </InputGroup>
                 </div>
-                
-                <div className="space-y-3">
-                  <div className="space-y-2">
-                    <Label className="text-sm">Comissoes</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        placeholder="0,00"
-                        className="pl-10"
-                        value={newForm.commissions}
-                        onChange={(e) => setNewForm({ ...newForm, commissions: e.target.value })}
-                      />
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
+              </CardContent>
+            </Card>
+          </div>
 
-            {/* Right Column - Deductions & Events */}
-            <div className="space-y-6">
-              {/* Descontos Card */}
-              <div className="rounded-lg border bg-card p-4 space-y-4">
-                <div className="flex items-center gap-2 text-sm font-medium text-destructive">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <Card className="w-full">
+              <CardHeader className="pb-0">
+                <CardTitle className="flex items-center gap-2 text-destructive">
                   <span className="flex h-6 w-6 items-center justify-center rounded-full bg-destructive/10 text-destructive text-xs font-bold">-</span>
                   Descontos
-                </div>
-                
-                <div className="grid gap-3 grid-cols-2">
+                </CardTitle>
+                <CardDescription>Valores que reduzem o liquido</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                   <div className="space-y-2">
                     <Label className="text-sm">Compras Func.</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                      <Input
+                    <InputGroup>
+                      <InputGroupAddon>
+                        <InputGroupText>R$</InputGroupText>
+                      </InputGroupAddon>
+                      <InputGroupInput
                         type="number"
                         step="0.01"
                         placeholder="0,00"
-                        className="pl-10"
                         value={newForm.employeePurchases}
                         onChange={(e) => setNewForm({ ...newForm, employeePurchases: e.target.value })}
                       />
-                    </div>
+                    </InputGroup>
                   </div>
                   <div className="space-y-2">
                     <Label className="text-sm">Vales</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                      <Input
+                    <InputGroup>
+                      <InputGroupAddon>
+                        <InputGroupText>R$</InputGroupText>
+                      </InputGroupAddon>
+                      <InputGroupInput
                         type="number"
                         step="0.01"
                         placeholder="0,00"
-                        className="pl-10"
                         value={newForm.vouchers}
                         onChange={(e) => setNewForm({ ...newForm, vouchers: e.target.value })}
                       />
-                    </div>
+                    </InputGroup>
                   </div>
                   <div className="space-y-2">
                     <Label className="text-sm">Adiantamento</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                      <Input
+                    <InputGroup>
+                      <InputGroupAddon>
+                        <InputGroupText>R$</InputGroupText>
+                      </InputGroupAddon>
+                      <InputGroupInput
                         type="number"
                         step="0.01"
                         placeholder="0,00"
-                        className="pl-10"
                         value={newForm.advances}
                         onChange={(e) => setNewForm({ ...newForm, advances: e.target.value })}
                       />
-                    </div>
+                    </InputGroup>
                   </div>
                   <div className="space-y-2">
                     <Label className="text-sm">INSS</Label>
-                    <div className="relative">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                      <Input
+                    <InputGroup>
+                      <InputGroupAddon>
+                        <InputGroupText>R$</InputGroupText>
+                      </InputGroupAddon>
+                      <InputGroupInput
                         type="number"
                         step="0.01"
                         placeholder="0,00"
-                        className="pl-10"
                         value={newForm.inss}
                         onChange={(e) => setNewForm({ ...newForm, inss: e.target.value })}
                       />
-                    </div>
+                    </InputGroup>
                   </div>
                 </div>
                 
@@ -1431,74 +1462,71 @@ const handleCreatePayroll = async () => {
                 
                 <div className="space-y-2">
                   <Label className="text-sm text-muted-foreground">FGTS (Informativo - nao desconta)</Label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                    <Input
+                  <InputGroup>
+                    <InputGroupAddon>
+                      <InputGroupText>R$</InputGroupText>
+                    </InputGroupAddon>
+                    <InputGroupInput
                       type="number"
                       step="0.01"
                       placeholder="0,00"
-                      className="pl-10 bg-muted/30"
+                      className="bg-muted/30"
                       value={newForm.fgts}
                       onChange={(e) => setNewForm({ ...newForm, fgts: e.target.value })}
                     />
-                  </div>
+                  </InputGroup>
                 </div>
-              </div>
+              </CardContent>
+            </Card>
 
-              {/* Lancamentos Manuais Card */}
-              <div className="rounded-lg border bg-card p-4 space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-bold">+/-</span>
-                    Lancamentos Manuais
-                  </div>
+            <Card className="w-full">
+              <CardHeader className="pb-0">
+                <CardTitle className="text-sm">Lancamentos Manuais</CardTitle>
+                <CardDescription>Adicione proventos ou descontos extras</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="space-y-2">
+                  <Input
+                    placeholder="Descricao (Ex: Premio, Uniforme...)"
+                    value={newPayrollEventForm.description}
+                    onChange={(e) => setNewPayrollEventForm({ ...newPayrollEventForm, description: e.target.value })}
+                  />
                 </div>
-                
-                {/* Add Event Form */}
-                <div className="space-y-3">
-                  <div className="space-y-2">
-                    <Input
-                      placeholder="Descricao (Ex: Premio, Uniforme...)"
-                      value={newPayrollEventForm.description}
-                      onChange={(e) => setNewPayrollEventForm({ ...newPayrollEventForm, description: e.target.value })}
+                <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
+                  <Select
+                    value={newPayrollEventForm.type}
+                    onValueChange={(value: 'provento' | 'desconto') => setNewPayrollEventForm({ ...newPayrollEventForm, type: value })}
+                  >
+                    <SelectTrigger className="w-full sm:w-[140px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="provento">Provento (+)</SelectItem>
+                      <SelectItem value="desconto">Desconto (-)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <InputGroup className="w-full sm:flex-1">
+                    <InputGroupAddon>
+                      <InputGroupText>R$</InputGroupText>
+                    </InputGroupAddon>
+                    <InputGroupInput
+                      type="number"
+                      step="0.01"
+                      placeholder="0,00"
+                      value={newPayrollEventForm.value}
+                      onChange={(e) => setNewPayrollEventForm({ ...newPayrollEventForm, value: e.target.value })}
                     />
-                  </div>
-                  <div className="flex gap-2">
-                    <Select
-                      value={newPayrollEventForm.type}
-                      onValueChange={(value: 'provento' | 'desconto') => setNewPayrollEventForm({ ...newPayrollEventForm, type: value })}
-                    >
-                      <SelectTrigger className="w-[140px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="provento">Provento (+)</SelectItem>
-                        <SelectItem value="desconto">Desconto (-)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <div className="relative flex-1">
-                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">R$</span>
-                      <Input
-                        type="number"
-                        step="0.01"
-                        placeholder="0,00"
-                        className="pl-10"
-                        value={newPayrollEventForm.value}
-                        onChange={(e) => setNewPayrollEventForm({ ...newPayrollEventForm, value: e.target.value })}
-                      />
-                    </div>
-                    <Button 
-                      type="button" 
-                      size="icon"
-                      onClick={handleAddNewPayrollEvent}
-                      disabled={!newPayrollEventForm.description || !newPayrollEventForm.value}
-                    >
-                      <Plus className="h-4 w-4" />
-                    </Button>
-                  </div>
+                  </InputGroup>
+                  <Button 
+                    type="button" 
+                    size="icon"
+                    onClick={handleAddNewPayrollEvent}
+                    disabled={!newPayrollEventForm.description || !newPayrollEventForm.value}
+                  >
+                    <Plus className="h-4 w-4" />
+                  </Button>
                 </div>
 
-                {/* Events List */}
                 {newPayrollEvents.length > 0 && (
                   <div className="space-y-2 pt-2 border-t">
                     {newPayrollEvents.map((event) => (
@@ -1525,13 +1553,12 @@ const handleCreatePayroll = async () => {
                     ))}
                   </div>
                 )}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           </div>
 
-          {/* Live Preview Footer */}
           {newForm.employeeId && (
-            <div className="rounded-lg border-2 border-primary/20 bg-primary/5 p-4 mt-2">
+            <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 mt-2 overflow-hidden">
               <div className="flex items-center justify-between">
                 <div className="space-y-1">
                   <p className="text-sm text-muted-foreground">Previa do Salario Liquido</p>
