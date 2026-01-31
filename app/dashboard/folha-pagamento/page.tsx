@@ -523,7 +523,8 @@ const handleCreatePayroll = async () => {
       const res = await fetch('/api/payroll/import-pdf', { method: 'POST', body: form })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || 'Falha ao importar PDF')
+        const message = err?.error ? (err?.details ? `${err.error}: ${err.details}` : err.error) : 'Falha ao importar PDF'
+        throw new Error(message)
       }
       const data = await res.json()
       if (data?.month && data?.year) {
@@ -533,7 +534,7 @@ const handleCreatePayroll = async () => {
       await mutatePayrolls()
       toast({
         title: 'Importação concluída',
-        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).`,
+        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).${data.unmatchedCount ? ` Não vinculados: ${data.unmatchedCount}${Array.isArray(data.unmatched) ? ` (ex.: ${data.unmatched.map((u:any)=>u?.name||u?.cpf).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}`,
       })
     } catch (e: any) {
       toast({

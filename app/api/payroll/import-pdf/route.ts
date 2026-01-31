@@ -1,12 +1,16 @@
 import { NextResponse } from 'next/server'
 export const runtime = 'nodejs'
 import { createClient } from '@/lib/supabase/server'
-import * as pdfParse from 'pdf-parse'
+import { createRequire } from 'module'
 import { createPayrollItem, updatePayrollItem } from '@/lib/services/data-service'
 import type { PayrollItem } from '@/types'
 
 function normalizeText(s: string) {
   return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+}
+
+function normalizeName(s: string | undefined) {
+  return normalizeText(String(s || '')).replace(/\s+/g, ' ').trim()
 }
 
 function splitIntoReceipts(text: string): string[] {
@@ -149,6 +153,27 @@ type ParsedRow = {
   fgts?: number
 }
 
+function extractTextFromPdf2jsonData(data: any): string {
+  try {
+    const parts: string[] = []
+    const pages = Array.isArray(data?.Pages) ? data.Pages : []
+    for (const p of pages) {
+      const texts = Array.isArray(p?.Texts) ? p.Texts : []
+      for (const t of texts) {
+        const runs = Array.isArray(t?.R) ? t.R : []
+        for (const r of runs) {
+          const s = r?.T ? decodeURIComponent(String(r.T).replace(/\+/g, '%20')) : ''
+          if (s) parts.push(s)
+        }
+      }
+      parts.push('\n')
+    }
+    return parts.join(' ')
+  } catch {
+    return ''
+  }
+}
+
 function parseRows(text: string): ParsedRow[] {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
   const normLines = lines.map(normalizeText)
@@ -237,8 +262,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Tipo de arquivo invalido' }, { status: 400 })
     }
     const buf = Buffer.from(await file.arrayBuffer())
-    const parsed = await (pdfParse as any)(buf)
-    const text = String(parsed?.text || '')
+    const require = createRequire(import.meta.url)
+    let text = ''
+    try {
+      const pdfParseMod = require('pdf-parse')
+      const pdfParse = pdfParseMod?.default || pdfParseMod
+      const parsed = await pdfParse(buf)
+      text = String(parsed?.text || '').trim()
+    } catch {}
+    if (!text) {
+      const mod = require('pdf2json')
+      const PDFCtor = mod?.PDFParser || mod?.default || mod
+      if (!PDFCtor) {
+        return NextResponse.json({ error: 'Falha ao carregar pdf2json' }, { status: 500 })
+      }
+      text = await new Promise<string>((resolve, reject) => {
+        try {
+          const parser = new PDFCtor()
+          parser.on('pdfParser_dataError', (err: any) => reject(err?.parserError || err))
+          parser.on('pdfParser_dataReady', (data: any) => {
+            try {
+              const out = typeof (parser as any).getRawTextContent === 'function' ? (parser as any).getRawTextContent() : extractTextFromPdf2jsonData(data)
+              resolve(String(out || ''))
+            } catch {
+              resolve('')
+            }
+          })
+          parser.parseBuffer(buf)
+        } catch (e) {
+          reject(e)
+        }
+      })
+    }
     if (!text.trim()) {
       return NextResponse.json({ error: 'PDF sem texto legivel (possivelmente escaneado).' }, { status: 422 })
     }
@@ -260,6 +315,7 @@ export async function POST(request: Request) {
       }
     }
     const results: Array<{ employeeId: string; name: string; action: 'created' | 'updated'; netSalary: number }> = []
+    const unmatched: Array<{ name?: string; cpf?: string }> = []
     for (const row of rows) {
       let employee: any = null
       if (row.cpf) {
@@ -267,10 +323,19 @@ export async function POST(request: Request) {
         employee = cpfMap.get(key) || null
       }
       if (!employee && row.name) {
-        const n = normalizeText(row.name)
-        employee = employees.find(e => normalizeText(e.name || '') === n) || null
+        const n = normalizeName(row.name)
+        employee =
+          employees.find(e => normalizeName(e.name || '') === n) ||
+          employees.find(e => {
+            const en = normalizeName(e.name || '')
+            return en.includes(n) || n.includes(en)
+          }) ||
+          null
       }
-      if (!employee) continue
+      if (!employee) {
+        unmatched.push({ name: row.name, cpf: row.cpf })
+        continue
+      }
       const { data: existing } = await supabase
         .from('payroll_items')
         .select('*')
@@ -332,12 +397,21 @@ export async function POST(request: Request) {
       created: results.filter(r => r.action === 'created').length,
       updated: results.filter(r => r.action === 'updated').length,
       items: results,
+      rowsParsed: rows.length,
+      unmatchedCount: unmatched.length,
+      unmatched: unmatched.slice(0, 10),
       month,
       year,
     }
     return NextResponse.json(summary, { status: 200 })
   } catch (error) {
     console.error('Error importing payroll from PDF:', error)
-    return NextResponse.json({ error: 'Falha ao importar PDF' }, { status: 500 })
+    return NextResponse.json(
+      { 
+        error: 'Falha ao importar PDF',
+        details: error instanceof Error ? error.message : String(error)
+      }, 
+      { status: 500 }
+    )
   }
 }
