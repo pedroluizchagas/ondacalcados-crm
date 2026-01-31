@@ -689,6 +689,7 @@ export async function updatePayrollItem(id: string, payroll: Partial<PayrollItem
   const supabase = await createClient()
   const updateData: Record<string, unknown> = {}
   
+  if (payroll.baseSalary !== undefined) updateData.base_salary = payroll.baseSalary
   if (payroll.commissions !== undefined) updateData.commissions = payroll.commissions
   if (payroll.employeePurchases !== undefined) updateData.employee_purchases = payroll.employeePurchases
   if (payroll.vouchers !== undefined) updateData.vouchers = payroll.vouchers
@@ -750,6 +751,114 @@ export async function deletePayrollItem(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+export async function createPayrollItemAdmin(payroll: Omit<PayrollItem, 'id'>): Promise<PayrollItem> {
+  const admin = createServiceClient()
+  const { data, error } = await admin
+    .from('payroll_items')
+    .insert({
+      employee_id: payroll.employeeId,
+      month: payroll.month,
+      year: payroll.year,
+      store_id: payroll.storeId,
+      position_id: payroll.positionId,
+      base_salary: payroll.baseSalary,
+      commissions: payroll.commissions,
+      employee_purchases: payroll.employeePurchases,
+      vouchers: payroll.vouchers,
+      advances: payroll.advances,
+      inss: payroll.inss,
+      fgts: payroll.fgts,
+      gross_salary: payroll.grossSalary,
+      total_deductions: payroll.totalDeductions,
+      net_salary: payroll.netSalary,
+      payment_type: payroll.paymentType,
+      status: payroll.status,
+      custom_events: payroll.customEvents,
+    })
+    .select(`*, employees(name)`)
+    .single()
+  
+  if (error) throw new Error(error.message)
+  return {
+    id: data.id,
+    employeeId: data.employee_id,
+    employeeName: data.employees?.name || '',
+    month: data.month,
+    year: data.year,
+    storeId: data.store_id,
+    positionId: data.position_id,
+    baseSalary: Number(data.base_salary),
+    commissions: Number(data.commissions),
+    employeePurchases: Number(data.employee_purchases),
+    vouchers: Number(data.vouchers),
+    advances: Number(data.advances),
+    inss: Number(data.inss),
+    fgts: Number(data.fgts),
+    grossSalary: Number(data.gross_salary),
+    totalDeductions: Number(data.total_deductions),
+    netSalary: Number(data.net_salary),
+    paymentType: data.payment_type,
+    status: data.status,
+    paymentDate: data.payment_date,
+    customEvents: data.custom_events,
+  }
+}
+
+export async function updatePayrollItemAdmin(id: string, payroll: Partial<PayrollItem>): Promise<PayrollItem> {
+  const admin = createServiceClient()
+  const updateData: Record<string, unknown> = {}
+  
+  if (payroll.baseSalary !== undefined) updateData.base_salary = payroll.baseSalary
+  if (payroll.commissions !== undefined) updateData.commissions = payroll.commissions
+  if (payroll.employeePurchases !== undefined) updateData.employee_purchases = payroll.employeePurchases
+  if (payroll.vouchers !== undefined) updateData.vouchers = payroll.vouchers
+  if (payroll.advances !== undefined) updateData.advances = payroll.advances
+  if (payroll.inss !== undefined) updateData.inss = payroll.inss
+  if (payroll.fgts !== undefined) updateData.fgts = payroll.fgts
+  if (payroll.grossSalary !== undefined) updateData.gross_salary = payroll.grossSalary
+  if (payroll.totalDeductions !== undefined) updateData.total_deductions = payroll.totalDeductions
+  if (payroll.netSalary !== undefined) updateData.net_salary = payroll.netSalary
+  if (payroll.paymentType !== undefined) updateData.payment_type = payroll.paymentType
+  if (payroll.status !== undefined) updateData.status = payroll.status
+  if (payroll.paymentDate !== undefined) updateData.payment_date = payroll.paymentDate
+  if (payroll.customEvents !== undefined) updateData.custom_events = payroll.customEvents
+  if (payroll.settlementDate !== undefined) updateData.settlement_date = payroll.settlementDate
+  if (payroll.settlementLocation !== undefined) updateData.settlement_location = payroll.settlementLocation
+
+  const { data, error } = await admin
+    .from('payroll_items')
+    .update(updateData)
+    .eq('id', id)
+    .select(`*, employees(name)`)
+    .single()
+  
+  if (error) throw new Error(error.message)
+  return {
+    id: data.id,
+    employeeId: data.employee_id,
+    employeeName: data.employees?.name || '',
+    month: data.month,
+    year: data.year,
+    storeId: data.store_id,
+    positionId: data.position_id,
+    baseSalary: Number(data.base_salary),
+    commissions: Number(data.commissions),
+    employeePurchases: Number(data.employee_purchases),
+    vouchers: Number(data.vouchers),
+    advances: Number(data.advances),
+    inss: Number(data.inss),
+    fgts: Number(data.fgts),
+    grossSalary: Number(data.gross_salary),
+    totalDeductions: Number(data.total_deductions),
+    netSalary: Number(data.net_salary),
+    paymentType: data.payment_type,
+    status: data.status,
+    paymentDate: data.payment_date,
+    settlementDate: data.settlement_date,
+    settlementLocation: data.settlement_location,
+    customEvents: data.custom_events,
+  }
+}
 // ============ DASHBOARD STATS ============
 
 export async function getDashboardStats() {

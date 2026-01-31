@@ -1,7 +1,7 @@
 'use client'
 
 import React from "react"
-import { useState, useMemo } from 'react'
+ import { useState, useMemo, useCallback } from 'react'
 import { useEmployees, useVacations, useStores, usePositions, createEmployee as apiCreateEmployee, updateEmployee as apiUpdateEmployee } from '@/hooks/use-data'
 import type { Employee, VacationAlertLevel } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -100,7 +100,7 @@ export default function FuncionariosPage() {
     return deadline
   }
 
-  const getVacationAlertLevel = (employee: Employee, vacationsList: any[]): { level: VacationAlertLevel; daysUntilDeadline: number } => {
+ const getVacationAlertLevel = useCallback((employee: Employee, vacationsList: any[]): { level: VacationAlertLevel; daysUntilDeadline: number } => {
     const today = new Date()
     const hasVacation = vacationsList.some((v: any) =>
       ((v as any).employeeId || (v as any).employee_id) === employee.id &&
@@ -117,14 +117,14 @@ export default function FuncionariosPage() {
     if (daysUntilDeadline <= 30) return { level: 'attention', daysUntilDeadline }
     if (daysUntilDeadline <= 60) return { level: 'planning', daysUntilDeadline }
     return { level: 'ok', daysUntilDeadline }
-  }
+  }, [])
 
   const employeesWithAlerts = useMemo(() => {
     return (employees || []).map((emp: any) => {
       const alert = getVacationAlertLevel(emp, vacations || [])
       return { ...emp, vacationAlert: alert }
     })
-  }, [employees, vacations])
+   }, [employees, vacations, getVacationAlertLevel])
 
   const filteredEmployees = useMemo(() => {
     return employeesWithAlerts.filter((employee) => {

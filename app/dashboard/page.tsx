@@ -67,7 +67,7 @@ function getVacationAlertLevel(employee: Employee, vacations: Vacation[]): { lev
 }
 
 export default function DashboardPage() {
-  const today = new Date()
+  const today = useMemo(() => new Date(), [])
   const firstDayOfMonth = new Date(today.getFullYear(), today.getMonth(), 1)
   const lastDayOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0)
   

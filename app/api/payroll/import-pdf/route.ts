@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server'
 export const runtime = 'nodejs'
 import { createClient } from '@/lib/supabase/server'
 import { createRequire } from 'module'
-import { createPayrollItem, updatePayrollItem } from '@/lib/services/data-service'
+import { createPayrollItemAdmin, updatePayrollItemAdmin } from '@/lib/services/data-service'
 import type { PayrollItem } from '@/types'
+import { loadRubricas, getRubricaTypeSync } from '@/lib/rubricas'
 
 function normalizeText(s: string) {
   return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
@@ -56,6 +57,7 @@ function extractNameAndNet(block: string): { name?: string; net?: number } {
     /nome\s*(?:do\s*funcionari[oa])?\s*[:\-]\s*([a-z\u00c0-\u017f\s]+)/i,
     /funcionari[oa]\s*[:\-]\s*([a-z\u00c0-\u017f\s]+)/i,
     /colaborador\s*[:\-]\s*([a-z\u00c0-\u017f\s]+)/i,
+    /empregad[oa]\s*[:\-]\s*([a-z\u00c0-\u017f\s]+)/i,
   ]
   for (const rx of namePatterns) {
     const m = block.match(rx)
@@ -146,11 +148,17 @@ function detectCompetence(text: string): { month?: number; year?: number } {
 type ParsedRow = {
   name?: string
   cpf?: string
+  baseSalary?: number
   commissions?: number
   employeePurchases?: number
   vouchers?: number
+  advances?: number
   inss?: number
   fgts?: number
+  events?: Array<{ id: string; description: string; type: 'provento' | 'desconto'; value: number }>
+  pdfGross?: number
+  pdfDiscounts?: number
+  pdfNet?: number
 }
 
 function extractTextFromPdf2jsonData(data: any): string {
@@ -174,83 +182,299 @@ function extractTextFromPdf2jsonData(data: any): string {
   }
 }
 
+function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
+  try {
+    const pages = Array.isArray(data?.Pages) ? data.Pages : []
+    const allRows: ParsedRow[] = []
+    for (const p of pages) {
+      const tokens: Array<{ x: number; y: number; s: string }> = []
+      const texts = Array.isArray(p?.Texts) ? p.Texts : []
+      for (const t of texts) {
+        const runs = Array.isArray(t?.R) ? t.R : []
+        for (const r of runs) {
+          const s = r?.T ? decodeURIComponent(String(r.T).replace(/\+/g, '%20')) : ''
+          if (!s) continue
+          tokens.push({ x: Number(t?.x || 0), y: Number(t?.y || 0), s })
+        }
+      }
+      // cluster lines by y (rounded)
+      const lineMap = new Map<number, Array<{ x: number; s: string }>>()
+      for (const tk of tokens) {
+        const key = Math.round(tk.y)
+        if (!lineMap.has(key)) lineMap.set(key, [])
+        lineMap.get(key)!.push({ x: tk.x, s: tk.s })
+      }
+      const lines = Array.from(lineMap.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([y, arr]) => ({ y, parts: arr.sort((a, b) => a.x - b.x) }))
+      // find header with "Rendimentos" and "Descontos"
+      let xRend = NaN
+      let xDesc = NaN
+      let headerY = NaN
+      for (const ln of lines) {
+        const text = ln.parts.map(p => p.s).join(' ')
+        const n = normalizeText(text)
+        if (/\brendimentos\b/.test(n) && /\bdescontos?\b/.test(n)) {
+          const rendTk = ln.parts.find(p => normalizeText(p.s).includes('rendimentos'))
+          const descTk = ln.parts.find(p => normalizeText(p.s).includes('descontos'))
+          if (rendTk && descTk) {
+            xRend = rendTk.x
+            xDesc = descTk.x
+            headerY = ln.y
+            break
+          }
+        }
+      }
+      if (!Number.isFinite(xRend) || !Number.isFinite(xDesc)) {
+        continue
+      }
+      const descXMax = Math.min(xRend, (xRend + xDesc) / 2) - 1
+      const moneyRx = /\d{1,3}(?:\.\d{3})*,\d{2}/
+      let baseSalary = 0
+      const events: Array<{ id: string; description: string; type: 'provento' | 'desconto'; value: number }> = []
+      let fgts = 0
+      let commissions = 0
+      let purchases = 0
+      let irrf = 0
+      let advances = 0
+      let inss = 0
+      let pdfGross = 0
+      let pdfDiscounts = 0
+      let pdfNet = 0
+      for (const ln of lines) {
+        if (ln.y <= headerY) continue
+        const lineText = ln.parts.map(p => p.s).join(' ')
+        const nline = normalizeText(lineText)
+        if (/total\s+(de\s+)?vencimentos/.test(nline)) {
+          const lastTk = [...ln.parts].reverse().find(p => moneyRx.test(p.s))
+          if (lastTk) pdfGross = parseMoney(lastTk.s)
+          continue
+        }
+        if (/total\s+(de\s+)?descontos?/.test(nline)) {
+          const lastTk = [...ln.parts].reverse().find(p => moneyRx.test(p.s))
+          if (lastTk) pdfDiscounts = parseMoney(lastTk.s)
+          continue
+        }
+        if (/liquido/.test(nline)) {
+          const lastTk = [...ln.parts].reverse().find(p => moneyRx.test(p.s))
+          if (lastTk) pdfNet = parseMoney(lastTk.s)
+          continue
+        }
+        // build description from left side
+        const desc = ln.parts.filter(p => p.x <= descXMax).map(p => p.s).join(' ').trim()
+        if (!desc) continue
+        // check for FGTS informative in the line
+        if (/\bfgts\b|f\.?g\.?t\.?s/.test(normalizeText(desc))) {
+          const valTk = [...ln.parts].reverse().find(p => moneyRx.test(p.s))
+          if (valTk) fgts = parseMoney(valTk.s)
+          continue
+        }
+        // find money on right; classify by nearness to columns
+        const moneyTks = ln.parts.filter(p => moneyRx.test(p.s))
+        if (moneyTks.length === 0) continue
+        let rendVal = 0
+        let descVal = 0
+        for (const tk of moneyTks) {
+          const distR = Math.abs(tk.x - xRend)
+          const distD = Math.abs(tk.x - xDesc)
+          if (distR <= distD) rendVal = parseMoney(tk.s)
+          else descVal = parseMoney(tk.s)
+        }
+        const typeByRubrica = getRubricaTypeSync(desc)
+        if (typeByRubrica === 'base') {
+          baseSalary = rendVal || baseSalary || descVal
+          continue
+        }
+        const nd = normalizeText(desc)
+        if (/comiss/.test(nd) && rendVal > 0) {
+          commissions += rendVal
+          continue
+        }
+        if (/\bimposto(?:\s+de)?\s+renda\b|\birrf\b/.test(nd) && descVal > 0) {
+          irrf += descVal
+          continue
+        }
+        if (/compras?\s+efetuadas?\s+na\s+empresa|vale\s+mercador|consumo/.test(nd) && descVal > 0) {
+          purchases += descVal
+          continue
+        }
+        if (/adiantamento/.test(nd) && descVal > 0) {
+          advances += descVal
+          continue
+        }
+        if (/\b(?:i\.?n\.?s\.?s\.?|inss)\b|\bprevid/.test(nd) && descVal > 0) {
+          inss += descVal
+          continue
+        }
+        if (rendVal > 0) {
+          events.push({ id: `e-${events.length}`, description: desc, type: 'provento', value: rendVal })
+        }
+        if (descVal > 0) {
+          events.push({ id: `e-${events.length}`, description: desc, type: 'desconto', value: descVal })
+        }
+      }
+      let eventProventos = events.filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
+      let eventDescontos = events.filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
+      let grossSalary = baseSalary + commissions + eventProventos
+      let totalDeductions = purchases + irrf + advances + inss + eventDescontos
+      let netSalary = grossSalary - totalDeductions
+      if (pdfGross > 0 && pdfDiscounts > 0) {
+        grossSalary = pdfGross
+        totalDeductions = pdfDiscounts
+        netSalary = pdfNet > 0 ? pdfNet : grossSalary - totalDeductions
+        const otherProventos = Math.max(0, grossSalary - (baseSalary + commissions + eventProventos))
+        if (otherProventos > 0.009) {
+          events.push({ id: `e-${events.length}`, description: 'Outros Rendimentos', type: 'provento', value: otherProventos })
+          eventProventos += otherProventos
+        }
+        const otherDescontos = Math.max(0, totalDeductions - (purchases + irrf + advances + inss + eventDescontos))
+        if (otherDescontos > 0.009) {
+          events.push({ id: `e-${events.length}`, description: 'Outros Descontos', type: 'desconto', value: otherDescontos })
+          eventDescontos += otherDescontos
+        }
+      }
+      const row: ParsedRow = {
+        baseSalary: baseSalary || undefined,
+        commissions: commissions || undefined,
+        employeePurchases: purchases || undefined,
+        vouchers: irrf || undefined,
+        advances: advances || undefined,
+        inss: inss || undefined,
+        fgts: fgts || undefined,
+        events: events.length ? events : undefined,
+        pdfGross: pdfGross || undefined,
+        pdfDiscounts: pdfDiscounts || undefined,
+        pdfNet: pdfNet || undefined,
+      }
+      allRows.push(row)
+    }
+    return allRows.filter(r => (r.events && r.events.length) || r.baseSalary || r.pdfGross || r.pdfNet)
+  } catch {
+    return []
+  }
+}
 function parseRows(text: string): ParsedRow[] {
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-  const normLines = lines.map(normalizeText)
-  let headerIdx = -1
-  for (let i = 0; i < normLines.length; i++) {
-    const l = normLines[i]
-    if ((l.includes('nome') || l.includes('funcionari') || l.includes('colaborador')) && (l.includes('comiss') || l.includes('compra') || l.includes('consumo') || l.includes('vale') || l.includes('imposto') || l.includes('ir') || l.includes('inss') || l.includes('fgts'))) {
-      headerIdx = i
-      break
+  const joinedText = lines.join(' ')
+  const norm = normalizeText(joinedText)
+  const cpfMatch = joinedText.match(/\b\d{3}\.\d{3}\.\d{3}\-\d{2}\b|\b\d{11}\b/)
+  const nameMatch = joinedText.match(/(?:nome|funcionari[oa]|colaborador|empregad[oa])[:\s]*([A-Za-z\u00C0-\u017F\s]+)/i)
+  let base = 0
+  const baseMatch = joinedText.match(/sal(?:á|a)rio\s*base[^\d]*([\d\.\,]+)/i) || joinedText.match(/dias\s*normais[^\d]*([\d\.\,]+)/i)
+  if (baseMatch) base = parseMoney(baseMatch[1])
+  const fgtsMatch = joinedText.match(/f\.?g\.?t\.?s(?:\s+do\s+periodo)?[^\d]*([\d\.\,]+)/i)
+  const fgts = fgtsMatch ? parseMoney(fgtsMatch[1]) : 0
+  const totalGrossMatch = joinedText.match(/total\s+(?:de\s+)?(?:vencimentos|proventos)[^\d]*([\d\.\,]+)/i)
+  const totalDiscountsMatch = joinedText.match(/total\s+(?:de\s+)?descontos?[^\d]*([\d\.\,]+)/i)
+  const netMatch = joinedText.match(/liquido[^\d]*r?\$?\s*([\d\.\,]+)/i)
+  let totalGrossFromPdf = totalGrossMatch ? parseMoney(totalGrossMatch[1]) : 0
+  let totalDiscountsFromPdf = totalDiscountsMatch ? parseMoney(totalDiscountsMatch[1]) : 0
+  let netFromPdf = netMatch ? parseMoney(netMatch[1]) : 0
+  const moneyRx = /([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-\%\/\.]+?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})(?!\S)/g
+  const events: Array<{ id: string; description: string; type: 'provento' | 'desconto'; value: number }> = []
+  let commissions = 0
+  let purchases = 0
+  let irrf = 0
+  let advances = 0
+  let inss = 0
+  for (;;) {
+    const m = moneyRx.exec(joinedText)
+    if (!m) break
+    const desc = m[1].trim()
+    const val = parseMoney(m[2])
+    const nd = normalizeText(desc)
+    if (/total|liquido/.test(nd)) continue
+    const typeByRubrica = getRubricaTypeSync(desc)
+    if (typeByRubrica === 'base') {
+      base = base > 0 ? base : val
+      continue
+    }
+    if (typeByRubrica === 'fgts') {
+      continue
+    }
+    if (/comiss/.test(nd)) {
+      commissions += val
+      continue
+    }
+    if (typeByRubrica === 'provento' || /gratific|hora\s+extra|reflexo\s+extras?\s+dsr|abono\s+domingo|horas?\s+domingo|adicional|premio|diferenca\s+media|diferenca\s+13o/.test(nd)) {
+      events.push({ id: `e-${events.length}`, description: desc, type: 'provento', value: val })
+      continue
+    }
+    if (typeByRubrica === 'desconto' || /imposto(?:\s+de)?\s+renda|\birrf\b/.test(nd)) {
+      irrf += val
+      continue
+    }
+    if (/compras?\s+efetuadas?\s+na\s+empresa|vale\s+mercador|consumo/.test(nd)) {
+      purchases += val
+      continue
+    }
+    if (/vale\s+transporte|vale\s+avulso/.test(nd)) {
+      events.push({ id: `e-${events.length}`, description: desc, type: 'desconto', value: val })
+      continue
+    }
+    if (/adiantamento/.test(nd)) {
+      advances += val
+      continue
+    }
+    if (/\b(?:i\.?n\.?s\.?s\.?|inss)\b|\bprevid/.test(nd)) {
+      inss += val
+      continue
+    }
+    const isDesconto = /descont|contribui|negocial|vale/.test(nd)
+    events.push({ id: `e-${events.length}`, description: desc, type: isDesconto ? 'desconto' : 'provento', value: val })
+  }
+  let eventProventos = events.filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
+  let eventDescontos = events.filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
+  let grossSalary = base + commissions + eventProventos
+  let totalDeductions = purchases + irrf + advances + inss + eventDescontos
+  let netSalary = grossSalary - totalDeductions
+  if (totalGrossFromPdf > 0 && totalDiscountsFromPdf > 0) {
+    grossSalary = totalGrossFromPdf
+    totalDeductions = totalDiscountsFromPdf
+    netSalary = netFromPdf > 0 ? netFromPdf : grossSalary - totalDeductions
+    const otherProventos = Math.max(0, grossSalary - (base + commissions + eventProventos))
+    if (otherProventos > 0.009) {
+      events.push({ id: `e-${events.length}`, description: 'Outros Rendimentos', type: 'provento', value: otherProventos })
+      eventProventos += otherProventos
+    }
+    const otherDescontos = Math.max(0, totalDeductions - (purchases + irrf + advances + inss + eventDescontos))
+    if (otherDescontos > 0.009) {
+      events.push({ id: `e-${events.length}`, description: 'Outros Descontos', type: 'desconto', value: otherDescontos })
+      eventDescontos += otherDescontos
     }
   }
-  if (headerIdx >= 0) {
-    const header = lines[headerIdx]
-    const headerCols = header.split(/\s{2,}|\t/g).map(c => normalizeText(c))
-    const idxNome = headerCols.findIndex(c => c.includes('nome'))
-    const idxFuncionario = idxNome === -1 ? headerCols.findIndex(c => c.includes('funcionari') || c.includes('colaborador')) : -1
-    const idxComiss = headerCols.findIndex(c => c.includes('comiss'))
-    const idxCompras = headerCols.findIndex(c => c.includes('compra') || c.includes('consumo') || c.includes('vale'))
-    const idxImposto = headerCols.findIndex(c => c.includes('imposto') || c.includes('ir') || c.includes('renda'))
-    const idxInss = headerCols.findIndex(c => c.includes('inss'))
-    const idxFgts = headerCols.findIndex(c => c.includes('fgts'))
-    const out: ParsedRow[] = []
-    for (let i = headerIdx + 1; i < lines.length; i++) {
-      const row = lines[i]
-      const cols = row.split(/\s{2,}|\t/g).map(c => c.trim()).filter(Boolean)
-      if (cols.length < 2) continue
-      const name = idxNome >= 0 && idxNome < cols.length ? cols[idxNome] : (idxFuncionario >= 0 && idxFuncionario < cols.length ? cols[idxFuncionario] : cols[0])
-      const r: ParsedRow = { name }
-      if (idxComiss >= 0 && idxComiss < cols.length) r.commissions = parseMoney(cols[idxComiss])
-      if (idxCompras >= 0 && idxCompras < cols.length) r.employeePurchases = parseMoney(cols[idxCompras])
-      if (idxImposto >= 0 && idxImposto < cols.length) r.vouchers = parseMoney(cols[idxImposto])
-      if (idxInss >= 0 && idxInss < cols.length) r.inss = parseMoney(cols[idxInss])
-      if (idxFgts >= 0 && idxFgts < cols.length) r.fgts = parseMoney(cols[idxFgts])
-      const cpfMatch = row.match(/\b\d{3}\.\d{3}\.\d{3}\-\d{2}\b/)
-      if (cpfMatch) r.cpf = cpfMatch[0]
-      out.push(r)
-    }
-    if (out.length > 0) return out
+  const r: ParsedRow = {
+    name: nameMatch ? nameMatch[1].trim() : undefined,
+    cpf: cpfMatch ? cpfMatch[0] : undefined,
+    baseSalary: base || undefined,
+    commissions: commissions || undefined,
+    employeePurchases: purchases || undefined,
+    vouchers: irrf || undefined,
+    advances: advances || undefined,
+    inss: inss || undefined,
+    fgts: fgts || undefined,
+    events: events.length > 0 ? events : undefined,
+    pdfGross: totalGrossFromPdf || undefined,
+    pdfDiscounts: totalDiscountsFromPdf || undefined,
+    pdfNet: netFromPdf || undefined,
   }
-  const groups: string[][] = []
-  let current: string[] = []
-  for (const l of lines) {
-    if (!l.trim()) {
-      if (current.length > 0) {
-        groups.push(current)
-        current = []
-      }
-    } else {
-      current.push(l)
-    }
-  }
-  if (current.length > 0) groups.push(current)
-  const result: ParsedRow[] = []
-  for (const g of groups) {
-    const joined = g.join(' ')
-    const cpfMatch = joined.match(/\b\d{3}\.\d{3}\.\d{3}\-\d{2}\b/)
-    const nameMatch = joined.match(/(?:nome|funcionari[oa]|colaborador)[:\s]*([A-Za-z\u00C0-\u017F\s]+)/i)
-    const r: ParsedRow = {}
-    if (nameMatch) r.name = nameMatch[1].trim()
-    if (cpfMatch) r.cpf = cpfMatch[0]
-    const comMatch = joined.match(/comiss(?:ao|oes)?(?:\s+[A-Za-z\u00C0-\u017F]+)*[:\s]*([\d\.\,]+)/i)
-    const compMatch = joined.match(/(compras?|consumo|vale\s+merc(?:adoria)?)[^\d]*([\d\.\,]+)/i)
-    const irMatch = joined.match(/(imposto(?:\s+de)?\s+renda|ir)[^\d]*([\d\.\,]+)/i)
-    const inssMatch = joined.match(/(inss|previd)[^\d]*([\d\.\,]+)/i)
-    const fgtsMatch = joined.match(/fgts[^\d]*([\d\.\,]+)/i)
-    if (comMatch) r.commissions = parseMoney(comMatch[1])
-    if (compMatch) r.employeePurchases = parseMoney(compMatch[2] || compMatch[1])
-    if (irMatch) r.vouchers = parseMoney(irMatch[2])
-    if (inssMatch) r.inss = parseMoney(inssMatch[2] || inssMatch[1])
-    if (fgtsMatch) r.fgts = parseMoney(fgtsMatch[1])
-    if (Object.keys(r).length > 0) result.push(r)
-  }
-  return result
+  return [r]
 }
 
 export async function POST(request: Request) {
   try {
+    const supabase = await createClient()
+    const { data: authData } = await supabase.auth.getUser()
+    const uid = authData?.user?.id
+    let role = authData?.user?.user_metadata?.role as string | undefined
+    if (!role && uid) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', uid).single()
+      role = profile?.role as string | undefined
+    }
+    const allowed = new Set(['admin', 'hr', 'finance', 'manager'])
+    if (!role || !allowed.has(String(role))) {
+      return NextResponse.json({ error: 'Unauthorized: role required (admin/hr/finance)' }, { status: 403 })
+    }
     const formData = await request.formData()
     const file = formData.get('file')
     const monthParam = formData.get('month')
@@ -264,47 +488,60 @@ export async function POST(request: Request) {
     const buf = Buffer.from(await file.arrayBuffer())
     const require = createRequire(import.meta.url)
     let text = ''
+    let structuredRows: ParsedRow[] = []
     try {
       const pdfParseMod = require('pdf-parse')
       const pdfParse = pdfParseMod?.default || pdfParseMod
       const parsed = await pdfParse(buf)
       text = String(parsed?.text || '').trim()
     } catch {}
-    if (!text) {
+    try {
       const mod = require('pdf2json')
       const PDFCtor = mod?.PDFParser || mod?.default || mod
-      if (!PDFCtor) {
-        return NextResponse.json({ error: 'Falha ao carregar pdf2json' }, { status: 500 })
+      if (PDFCtor) {
+        const result = await new Promise<{ text?: string; rows?: ParsedRow[] }>((resolve, reject) => {
+          try {
+            const parser = new PDFCtor()
+            parser.on('pdfParser_dataError', (err: any) => reject(err?.parserError || err))
+            parser.on('pdfParser_dataReady', (data: any) => {
+              try {
+                const out = typeof (parser as any).getRawTextContent === 'function' ? (parser as any).getRawTextContent() : extractTextFromPdf2jsonData(data)
+                const rows = parseRowsStructuredFromPdfData(data)
+                resolve({ text: String(out || ''), rows })
+              } catch {
+                resolve({ rows: [] })
+              }
+            })
+            parser.parseBuffer(buf)
+          } catch (e) {
+            reject(e)
+          }
+        })
+        if (!text && result.text) text = result.text
+        structuredRows = Array.isArray(result.rows) ? result.rows! : []
       }
-      text = await new Promise<string>((resolve, reject) => {
-        try {
-          const parser = new PDFCtor()
-          parser.on('pdfParser_dataError', (err: any) => reject(err?.parserError || err))
-          parser.on('pdfParser_dataReady', (data: any) => {
-            try {
-              const out = typeof (parser as any).getRawTextContent === 'function' ? (parser as any).getRawTextContent() : extractTextFromPdf2jsonData(data)
-              resolve(String(out || ''))
-            } catch {
-              resolve('')
-            }
-          })
-          parser.parseBuffer(buf)
-        } catch (e) {
-          reject(e)
-        }
-      })
-    }
+    } catch {}
     if (!text.trim()) {
       return NextResponse.json({ error: 'PDF sem texto legivel (possivelmente escaneado).' }, { status: 422 })
     }
+    await loadRubricas()
     const competence = detectCompetence(text)
     const month = monthParam ? parseInt(String(monthParam), 10) : (competence.month || new Date().getMonth() + 1)
     const year = yearParam ? parseInt(String(yearParam), 10) : (competence.year || new Date().getFullYear())
-    const rows = parseReceiptsWithDedup(text)
+    function mergeIdentity(structured: ParsedRow[], textRows: ParsedRow[]): ParsedRow[] {
+      if (structured.length === 0) return textRows
+      if (textRows.length === 0) return structured
+      return structured.map(sr => {
+        if (!sr.name && textRows[0]?.name) sr.name = textRows[0].name
+        if (!sr.cpf && textRows[0]?.cpf) sr.cpf = textRows[0].cpf
+        return sr
+      })
+    }
+    let rows = structuredRows.length > 0 ? mergeIdentity(structuredRows, parseReceiptsWithDedup(text)) : parseReceiptsWithDedup(text)
+    // Attempt structured parse again using pdf2json if available in memory is not accessible; keep text-only for now.
     if (rows.length === 0) {
       return NextResponse.json({ error: 'Nao foi possivel extrair dados do PDF (layout nao reconhecido).' }, { status: 422 })
     }
-    const supabase = await createClient()
     const { data: employeesData } = await supabase.from('employees').select('*')
     const employees = employeesData || []
     const cpfMap = new Map<string, any>()
@@ -316,6 +553,7 @@ export async function POST(request: Request) {
     }
     const results: Array<{ employeeId: string; name: string; action: 'created' | 'updated'; netSalary: number }> = []
     const unmatched: Array<{ name?: string; cpf?: string }> = []
+    const divergences: Array<{ employeeId?: string; name?: string; calcNet: number; pdfNet: number; diff: number }> = []
     for (const row of rows) {
       let employee: any = null
       if (row.cpf) {
@@ -344,26 +582,21 @@ export async function POST(request: Request) {
         .eq('year', year)
         .limit(1)
       const item = existing && existing.length > 0 ? existing[0] : null
-      let baseSalary = 0
-      if (item && typeof item.base_salary === 'number') {
-        baseSalary = Number(item.base_salary)
-      } else if (employee.position_id) {
-        const { data: position } = await supabase
-          .from('positions')
-          .select('*')
-          .eq('id', employee.position_id)
-          .single()
-        baseSalary = Number(position?.base_salary || 0)
-      }
+      const baseSalary = row.baseSalary && row.baseSalary > 0 ? row.baseSalary : 0
       const commissions = row.commissions || (item ? Number(item.commissions || 0) : 0)
       const employeePurchases = row.employeePurchases || (item ? Number(item.employee_purchases || 0) : 0)
       const vouchers = row.vouchers || (item ? Number(item.vouchers || 0) : 0)
-      const advances = item ? Number(item.advances || 0) : 0
+      const advances = row.advances || (item ? Number(item.advances || 0) : 0)
       const inss = row.inss || (item ? Number(item.inss || 0) : 0)
       const fgts = row.fgts || (item ? Number(item.fgts || 0) : 0)
-      const grossSalary = baseSalary + commissions
-      const totalDeductions = employeePurchases + vouchers + advances + inss
+      const eventProventos = (row.events || []).filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
+      const eventDescontos = (row.events || []).filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
+      const grossSalary = baseSalary + commissions + eventProventos
+      const totalDeductions = employeePurchases + vouchers + advances + inss + eventDescontos
       const netSalary = grossSalary - totalDeductions
+      if (typeof row.pdfNet === 'number' && Math.abs(netSalary - row.pdfNet) > 1) {
+        divergences.push({ employeeId: employee.id, name: employee.name, calcNet: netSalary, pdfNet: row.pdfNet, diff: Number((netSalary - row.pdfNet).toFixed(2)) })
+      }
       const payload: Omit<PayrollItem, 'id'> = {
         employeeId: employee.id,
         employeeName: employee.name,
@@ -383,12 +616,13 @@ export async function POST(request: Request) {
         netSalary,
         paymentType: item?.payment_type || 'contabil',
         status: item?.status || 'pending',
+        customEvents: row.events && row.events.length > 0 ? row.events.map(e => ({ id: e.id, description: e.description, type: e.type, value: e.value })) : undefined,
       }
       if (item) {
-        const updated = await updatePayrollItem(String(item.id), payload)
+      const updated = await updatePayrollItemAdmin(String(item.id), payload)
         results.push({ employeeId: updated.employeeId || employee.id, name: updated.employeeName || employee.name, action: 'updated', netSalary: updated.netSalary || netSalary })
       } else {
-        const created = await createPayrollItem(payload)
+        const created = await createPayrollItemAdmin(payload)
         results.push({ employeeId: created.employeeId || employee.id, name: created.employeeName || employee.name, action: 'created', netSalary: created.netSalary || netSalary })
       }
     }
@@ -400,6 +634,8 @@ export async function POST(request: Request) {
       rowsParsed: rows.length,
       unmatchedCount: unmatched.length,
       unmatched: unmatched.slice(0, 10),
+      divergencesCount: divergences.length,
+      divergences: divergences.slice(0, 10),
       month,
       year,
     }

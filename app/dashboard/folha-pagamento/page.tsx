@@ -43,7 +43,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { InputGroup, InputGroupAddon, InputGroupText, InputGroupInput } from '@/components/ui/input-group'
 import { Separator } from '@/components/ui/separator'
-import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, CreditCard, Pencil, Plus, Loader2, Upload, FileText, Printer, Trash2 } from 'lucide-react'
+import { Search, DollarSign, Clock, CheckCircle, MoreHorizontal, Eye, CreditCard, Pencil, Plus, Loader2, Upload, FileText, Printer, Trash2, ArrowUpCircle, ArrowDownCircle } from 'lucide-react'
 import type { PayrollEvent } from '@/types'
 import { useToast } from '@/hooks/use-toast'
 
@@ -404,6 +404,117 @@ export default function FolhaPagamentoPage() {
     w.print()
   }
 
+  const handlePrintPayslip = () => {
+    if (!selectedPayroll) return
+    const w = window.open('', '_blank')
+    if (!w) return
+    const monthLabel = getMonthName(selectedPayroll.month)
+    const paymentTypeLabel = paymentTypeMap[selectedPayroll.paymentType]
+    const proventos = [
+      { label: 'Salario Base', value: selectedPayroll.baseSalary },
+      ...(selectedPayroll.commissions > 0 ? [{ label: 'Comissoes', value: selectedPayroll.commissions }] : []),
+      ...((selectedPayroll.customEvents || []).filter(e => e.type === 'provento').map(e => ({ label: e.description, value: e.value }))),
+    ]
+    const descontos = [
+      ...(selectedPayroll.employeePurchases > 0 ? [{ label: 'Compras', value: selectedPayroll.employeePurchases }] : []),
+      ...(selectedPayroll.vouchers > 0 ? [{ label: 'Imposto de Renda', value: selectedPayroll.vouchers }] : []),
+      ...(selectedPayroll.advances > 0 ? [{ label: 'Adiantamento', value: selectedPayroll.advances }] : []),
+      ...(selectedPayroll.inss > 0 ? [{ label: 'INSS', value: selectedPayroll.inss }] : []),
+      ...((selectedPayroll.customEvents || []).filter(e => e.type === 'desconto').map(e => ({ label: e.description, value: e.value }))),
+    ]
+    w.document.write(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Holerite - ${selectedPayroll.employeeName}</title>
+        <style>
+          * { box-sizing: border-box; }
+          body { font-family: Arial, sans-serif; padding: 24px; color: #111827; }
+          h1 { font-size: 20px; margin: 0; }
+          .header { display: grid; grid-template-columns: 1fr auto; gap: 8px; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px; }
+          .sub { color: #4b5563; font-size: 12px; }
+          .badge { display: inline-block; padding: 4px 8px; border: 1px solid #e5e7eb; border-radius: 6px; font-size: 11px; margin-left: 6px; }
+          .summary { display: flex; align-items: center; justify-content: space-between; background: #eef2ff; border: 1px solid #c7d2fe; border-radius: 8px; padding: 10px 12px; margin: 12px 0; }
+          .summary-title { font-size: 12px; color: #374151; }
+          .summary-value { font-size: 18px; font-weight: 700; color: #1e40af; }
+          .info-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+          .info-item { font-size: 12px; }
+          .info-label { color: #6b7280; font-size: 11px; }
+          .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; }
+          .card-title { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+          .row { display: flex; justify-content: space-between; font-size: 12px; margin: 2px 0; }
+          .total { display: flex; justify-content: space-between; font-weight: 600; border-top: 1px solid #e5e7eb; padding-top: 6px; margin-top: 6px; font-size: 12px; }
+          .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+          .fgts { background: #f3f4f6; border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+          .footer-total { display: flex; justify-content: space-between; align-items: center; font-size: 16px; font-weight: 700; border-top: 1px solid #e5e7eb; padding-top: 12px; margin-top: 12px; }
+          .paid { background: #ecfdf5; border: 1px solid #d1fae5; border-radius: 8px; padding: 8px 10px; margin-top: 10px; font-size: 12px; color: #065f46; }
+          @media print {
+            body { padding: 0 12mm; }
+            .summary { background: #ffffff; border-color: #e5e7eb; }
+            .badge { border-color: #e5e7eb; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1>Onda Calcados</h1>
+            <div class="sub">Holerite - ${monthLabel}/${selectedPayroll.year}</div>
+          </div>
+          <div>
+            <span class="badge">${paymentTypeLabel}</span>
+            <span class="badge">${selectedPayroll.status === 'paid' ? 'Pago' : 'Pendente'}</span>
+          </div>
+        </div>
+        <div class="summary">
+          <div>
+            <div class="summary-title">Salario Liquido</div>
+            <div class="sub">${selectedPayroll.employeeName}</div>
+          </div>
+          <div class="summary-value">${formatCurrency(selectedPayroll.netSalary)}</div>
+        </div>
+        <div class="info-grid">
+          <div class="info-item"><div class="info-label">Funcionario</div><div>${selectedPayroll.employeeName}</div></div>
+          <div class="info-item"><div class="info-label">Loja</div><div>${getStoreName(selectedPayroll.storeId)}</div></div>
+          <div class="info-item"><div class="info-label">Cargo</div><div>${getPositionName(selectedPayroll.positionId)}</div></div>
+          <div class="info-item"><div class="info-label">Classificacao</div><div>${paymentTypeLabel}</div></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">Proventos</div>
+            ${proventos.map(p => `<div class="row"><span>${p.label}</span><span>${formatCurrency(p.value)}</span></div>`).join('')}
+            <div class="total"><span>Total Proventos</span><span>${formatCurrency(selectedPayroll.grossSalary)}</span></div>
+          </div>
+          <div class="card">
+            <div class="card-title">Descontos</div>
+            ${descontos.map(d => `<div class="row"><span>${d.label}</span><span>-${formatCurrency(d.value)}</span></div>`).join('')}
+            <div class="total"><span>Total Descontos</span><span>-${formatCurrency(selectedPayroll.totalDeductions)}</span></div>
+          </div>
+        </div>
+        <div class="fgts">
+          <div class="sub">FGTS (informativo)</div>
+          <div class="row"><span>FGTS (8%) - Base de Calculo</span><span>${formatCurrency(selectedPayroll.fgts)}</span></div>
+        </div>
+        <div class="footer-total">
+          <span>Salario Liquido</span>
+          <span>${formatCurrency(selectedPayroll.netSalary)}</span>
+        </div>
+        ${selectedPayroll.status === 'paid' && selectedPayroll.settlementDate ? `
+          <div class="paid">
+            Pagamento Quitado em ${new Date(selectedPayroll.settlementDate).toLocaleDateString('pt-BR')}${selectedPayroll.settlementLocation ? ` via ${selectedPayroll.settlementLocation}` : ''}
+          </div>
+        ` : ''}
+        <script>
+          window.print();
+        </script>
+      </body>
+      </html>
+    `)
+    w.document.close()
+    w.focus()
+  }
+
   const openSettlement = (payroll: ExtendedPayrollItem) => {
     setSelectedPayroll(payroll)
     setSettlementForm({
@@ -543,7 +654,7 @@ const handleCreatePayroll = async () => {
       await mutatePayrolls()
       toast({
         title: 'Importação concluída',
-        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).${data.unmatchedCount ? ` Não vinculados: ${data.unmatchedCount}${Array.isArray(data.unmatched) ? ` (ex.: ${data.unmatched.map((u:any)=>u?.name||u?.cpf).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}`,
+        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).${data.unmatchedCount ? ` Não vinculados: ${data.unmatchedCount}${Array.isArray(data.unmatched) ? ` (ex.: ${data.unmatched.map((u:any)=>u?.name||u?.cpf).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}${data.divergencesCount ? ` | Divergências de líquido: ${data.divergencesCount}${Array.isArray(data.divergences) ? ` (ex.: ${data.divergences.map((d:any)=>d?.name).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}`,
       })
     } catch (e: any) {
       toast({
@@ -668,7 +779,7 @@ const handleCreatePayroll = async () => {
                 className="pl-9"
               />
             </div>
-            <Select value={monthFilter} onValueChange={setMonthFilter}>
+            <Select value={monthFilter} onValueChange={(v) => { if (v !== monthFilter) setMonthFilter(v) }}>
               <SelectTrigger>
                 <SelectValue placeholder="Mes" />
               </SelectTrigger>
@@ -688,7 +799,7 @@ const handleCreatePayroll = async () => {
                 <SelectItem value="12">Dezembro</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={yearFilter} onValueChange={setYearFilter}>
+            <Select value={yearFilter} onValueChange={(v) => { if (v !== yearFilter) setYearFilter(v) }}>
               <SelectTrigger>
                 <SelectValue placeholder="Ano" />
               </SelectTrigger>
@@ -701,7 +812,7 @@ const handleCreatePayroll = async () => {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <Select value={statusFilter} onValueChange={(v) => { if (v !== statusFilter) setStatusFilter(v) }}>
               <SelectTrigger>
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
@@ -711,7 +822,7 @@ const handleCreatePayroll = async () => {
                 <SelectItem value="paid">Pago</SelectItem>
               </SelectContent>
             </Select>
-            <Select value={storeFilter} onValueChange={setStoreFilter}>
+            <Select value={storeFilter} onValueChange={(v) => { if (v !== storeFilter) setStoreFilter(v) }}>
               <SelectTrigger>
                 <SelectValue placeholder="Loja" />
               </SelectTrigger>
@@ -724,7 +835,7 @@ const handleCreatePayroll = async () => {
                 ))}
               </SelectContent>
             </Select>
-            <Select value={paymentTypeFilter} onValueChange={setPaymentTypeFilter}>
+            <Select value={paymentTypeFilter} onValueChange={(v) => { if (v !== paymentTypeFilter) setPaymentTypeFilter(v) }}>
               <SelectTrigger>
                 <SelectValue placeholder="Tipo" />
               </SelectTrigger>
@@ -851,7 +962,11 @@ const handleCreatePayroll = async () => {
               <Label htmlFor="settlementLocation">Local da Quitacao</Label>
               <Select
                 value={settlementForm.location}
-                onValueChange={(value) => setSettlementForm({ ...settlementForm, location: value })}
+                onValueChange={(value) => {
+                  if (value !== settlementForm.location) {
+                    setSettlementForm({ ...settlementForm, location: value })
+                  }
+                }}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Selecione o local" />
@@ -885,125 +1000,135 @@ const handleCreatePayroll = async () => {
 
       {/* Payroll Details Dialog */}
       <Dialog open={isDetailsOpen} onOpenChange={setIsDetailsOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-full sm:max-w-3xl md:max-w-4xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Holerite</DialogTitle>
             <DialogDescription>Detalhes do pagamento</DialogDescription>
           </DialogHeader>
           {selectedPayroll && (
-            <div className="space-y-4">
-              <div className="text-center border-b pb-4">
-                <h3 className="font-semibold text-lg">Onda Calcados</h3>
-                <p className="text-sm text-muted-foreground">
-                  Holerite - {getMonthName(selectedPayroll.month)}/{selectedPayroll.year}
-                </p>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 items-center gap-2 border-b pb-4">
                 <div>
-                  <p className="text-sm text-muted-foreground">Funcionario</p>
+                  <h3 className="font-semibold text-lg">Onda Calcados</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Holerite - {getMonthName(selectedPayroll.month)}/{selectedPayroll.year}
+                  </p>
+                </div>
+                <div className="flex sm:justify-end items-center gap-2">
+                  <Badge variant={statusMap[selectedPayroll.status].variant}>
+                    {statusMap[selectedPayroll.status].label}
+                  </Badge>
+                  <Badge variant="secondary">{paymentTypeMap[selectedPayroll.paymentType]}</Badge>
+                  <Button variant="outline" onClick={handlePrintPayslip}>
+                    <Printer className="mr-2 h-4 w-4" />
+                    Imprimir Holerite
+                  </Button>
+                </div>
+              </div>
+              <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-muted-foreground">Salario Liquido</p>
+                  <p className="text-xs text-muted-foreground">{getMonthName(selectedPayroll.month)} / {selectedPayroll.year}</p>
+                </div>
+                <p className="text-2xl font-bold text-primary">{formatCurrency(selectedPayroll.netSalary)}</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">Funcionario</p>
                   <p className="font-medium">{selectedPayroll.employeeName}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Loja</p>
+                  <p className="text-xs text-muted-foreground">Loja</p>
                   <p className="font-medium">{getStoreName(selectedPayroll.storeId)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Cargo</p>
+                  <p className="text-xs text-muted-foreground">Cargo</p>
                   <p className="font-medium">{getPositionName(selectedPayroll.positionId)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Tipo</p>
+                  <p className="text-xs text-muted-foreground">Classificacao</p>
                   <Badge variant="secondary">{paymentTypeMap[selectedPayroll.paymentType]}</Badge>
                 </div>
               </div>
-
-              <Separator />
-
-<div className="space-y-2">
-  <h4 className="font-medium text-sm text-green-600">Proventos</h4>
-  <div className="flex justify-between text-sm">
-  <span>Salario Base</span>
-  <span>{formatCurrency(selectedPayroll.baseSalary)}</span>
-  </div>
-  {selectedPayroll.commissions > 0 && (
-  <div className="flex justify-between text-sm">
-  <span>Comissoes</span>
-  <span>{formatCurrency(selectedPayroll.commissions)}</span>
-  </div>
-  )}
-  {/* Lancamentos Manuais - Proventos */}
-  {selectedPayroll.customEvents?.filter(e => e.type === 'provento').map((event) => (
-  <div key={event.id} className="flex justify-between text-sm">
-  <span>{event.description}</span>
-  <span>{formatCurrency(event.value)}</span>
-  </div>
-  ))}
-  <div className="flex justify-between font-medium border-t pt-2">
-  <span>Total Proventos</span>
-  <span className="text-green-600">{formatCurrency(selectedPayroll.grossSalary)}</span>
-  </div>
-  </div>
-  
-  <Separator />
-  
-  <div className="space-y-2">
-  <h4 className="font-medium text-sm text-destructive">Descontos</h4>
-  {selectedPayroll.employeePurchases > 0 && (
-  <div className="flex justify-between text-sm">
-  <span>Compras</span>
-  <span>-{formatCurrency(selectedPayroll.employeePurchases)}</span>
-  </div>
-  )}
-  {selectedPayroll.vouchers > 0 && (
-  <div className="flex justify-between text-sm">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="rounded-lg border p-4 space-y-2">
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <ArrowUpCircle className="h-4 w-4 text-green-600" />
+                    <span className="text-green-600">Proventos</span>
+                  </h4>
+                  <div className="flex justify-between text-sm">
+                    <span>Salario Base</span>
+                    <span>{formatCurrency(selectedPayroll.baseSalary)}</span>
+                  </div>
+                  {selectedPayroll.commissions > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>Comissoes</span>
+                      <span>{formatCurrency(selectedPayroll.commissions)}</span>
+                    </div>
+                  )}
+                  {selectedPayroll.customEvents?.filter(e => e.type === 'provento').map((event) => (
+                    <div key={event.id} className="flex justify-between text-sm">
+                      <span>{event.description}</span>
+                      <span>{formatCurrency(event.value)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-medium border-t pt-2">
+                    <span>Total Proventos</span>
+                    <span className="text-green-600">{formatCurrency(selectedPayroll.grossSalary)}</span>
+                  </div>
+                </div>
+                <div className="rounded-lg border p-4 space-y-2">
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <ArrowDownCircle className="h-4 w-4 text-destructive" />
+                    <span className="text-destructive">Descontos</span>
+                  </h4>
+                  {selectedPayroll.employeePurchases > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>Compras</span>
+                      <span>-{formatCurrency(selectedPayroll.employeePurchases)}</span>
+                    </div>
+                  )}
+                  {selectedPayroll.vouchers > 0 && (
+                    <div className="flex justify-between text-sm">
                       <span>Imposto de Renda</span>
-  <span>-{formatCurrency(selectedPayroll.vouchers)}</span>
-  </div>
-  )}
-  {selectedPayroll.advances > 0 && (
-  <div className="flex justify-between text-sm">
-  <span>Adiantamento</span>
-  <span>-{formatCurrency(selectedPayroll.advances)}</span>
-  </div>
-  )}
-  {selectedPayroll.inss > 0 && (
-  <div className="flex justify-between text-sm">
-  <span>INSS</span>
-  <span>-{formatCurrency(selectedPayroll.inss)}</span>
-  </div>
-  )}
-  {/* Lancamentos Manuais - Descontos */}
-  {selectedPayroll.customEvents?.filter(e => e.type === 'desconto').map((event) => (
-  <div key={event.id} className="flex justify-between text-sm">
-  <span>{event.description}</span>
-  <span>-{formatCurrency(event.value)}</span>
-  </div>
-  ))}
-  <div className="flex justify-between font-medium border-t pt-2">
-  <span>Total Descontos</span>
-  <span className="text-destructive">-{formatCurrency(selectedPayroll.totalDeductions)}</span>
-  </div>
-  </div>
-  
-  <Separator />
-  
-  <div className="space-y-2">
-  <h4 className="font-medium text-sm text-muted-foreground">Informativo (nao descontado)</h4>
-  <div className="flex justify-between text-sm">
-  <span>FGTS (8%) - Base de Calculo</span>
-  <span>{formatCurrency(selectedPayroll.fgts)}</span>
-  </div>
-  <p className="text-xs text-muted-foreground italic">O FGTS e apenas informativo e nao e descontado do salario liquido.</p>
-  </div>
-
-              <Separator />
-
-              <div className="flex justify-between items-center text-lg font-bold">
+                      <span>-{formatCurrency(selectedPayroll.vouchers)}</span>
+                    </div>
+                  )}
+                  {selectedPayroll.advances > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>Adiantamento</span>
+                      <span>-{formatCurrency(selectedPayroll.advances)}</span>
+                    </div>
+                  )}
+                  {selectedPayroll.inss > 0 && (
+                    <div className="flex justify-between text-sm">
+                      <span>INSS</span>
+                      <span>-{formatCurrency(selectedPayroll.inss)}</span>
+                    </div>
+                  )}
+                  {selectedPayroll.customEvents?.filter(e => e.type === 'desconto').map((event) => (
+                    <div key={event.id} className="flex justify-between text-sm">
+                      <span>{event.description}</span>
+                      <span>-{formatCurrency(event.value)}</span>
+                    </div>
+                  ))}
+                  <div className="flex justify-between font-medium border-t pt-2">
+                    <span>Total Descontos</span>
+                    <span className="text-destructive">-{formatCurrency(selectedPayroll.totalDeductions)}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="rounded-lg bg-muted/40 p-4 space-y-2">
+                <p className="text-sm text-muted-foreground">FGTS (informativo)</p>
+                <div className="flex justify-between text-sm">
+                  <span>FGTS (8%) - Base de Calculo</span>
+                  <span>{formatCurrency(selectedPayroll.fgts)}</span>
+                </div>
+              </div>
+              <div className="flex justify-between items-center text-lg font-bold border-t pt-4">
                 <span>Salario Liquido</span>
                 <span className="text-primary">{formatCurrency(selectedPayroll.netSalary)}</span>
               </div>
-
               {selectedPayroll.status === 'paid' && selectedPayroll.settlementDate && (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                   <p className="text-sm font-medium text-green-800">Pagamento Quitado</p>
@@ -1024,7 +1149,7 @@ const handleCreatePayroll = async () => {
 
       {/* Edit Payroll Dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-full sm:max-w-2xl lg:max-w-3xl max-h-[85vh] overflow-y-auto overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Editar Folha de Pagamento</DialogTitle>
             <DialogDescription>
@@ -1032,72 +1157,89 @@ const handleCreatePayroll = async () => {
             </DialogDescription>
           </DialogHeader>
           {selectedPayroll && (
-            <div className="space-y-4">
-              <div className="bg-muted p-3 rounded-lg">
+            <div className="space-y-5">
+              <div className="rounded-lg border p-4 bg-muted/40">
                 <p className="text-sm text-muted-foreground">Salario Base</p>
                 <p className="text-lg font-semibold">{formatCurrency(selectedPayroll.baseSalary)}</p>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-commissions">Comissoes (R$)</Label>
-                  <Input
-                    id="edit-commissions"
-                    type="number"
-                    step="0.01"
-                    value={editForm.commissions}
-                    onChange={(e) => setEditForm({ ...editForm, commissions: e.target.value })}
-                  />
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="rounded-lg border p-4 space-y-3">
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <ArrowUpCircle className="h-4 w-4 text-green-600" />
+                    <span className="text-green-600">Proventos</span>
+                  </h4>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-commissions">Comissoes (R$)</Label>
+                    <Input
+                      id="edit-commissions"
+                      type="number"
+                      step="0.01"
+                      value={editForm.commissions}
+                      onChange={(e) => setEditForm({ ...editForm, commissions: e.target.value })}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-purchases">Compras (R$)</Label>
-                  <Input
-                    id="edit-purchases"
-                    type="number"
-                    step="0.01"
-                    value={editForm.employeePurchases}
-                    onChange={(e) => setEditForm({ ...editForm, employeePurchases: e.target.value })}
-                  />
+
+                <div className="rounded-lg border p-4 space-y-3">
+                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                    <ArrowDownCircle className="h-4 w-4 text-destructive" />
+                    <span className="text-destructive">Descontos</span>
+                  </h4>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-purchases">Compras (R$)</Label>
+                    <Input
+                      id="edit-purchases"
+                      type="number"
+                      step="0.01"
+                      value={editForm.employeePurchases}
+                      onChange={(e) => setEditForm({ ...editForm, employeePurchases: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-vouchers">Imposto de Renda (R$)</Label>
+                    <Input
+                      id="edit-vouchers"
+                      type="number"
+                      step="0.01"
+                      value={editForm.vouchers}
+                      onChange={(e) => setEditForm({ ...editForm, vouchers: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-advances">Adiantamento (R$)</Label>
+                    <Input
+                      id="edit-advances"
+                      type="number"
+                      step="0.01"
+                      value={editForm.advances}
+                      onChange={(e) => setEditForm({ ...editForm, advances: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-inss">INSS (R$)</Label>
+                    <Input
+                      id="edit-inss"
+                      type="number"
+                      step="0.01"
+                      value={editForm.inss}
+                      onChange={(e) => setEditForm({ ...editForm, inss: e.target.value })}
+                    />
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-vouchers">Imposto de Renda (R$)</Label>
-                  <Input
-                    id="edit-vouchers"
-                    type="number"
-                    step="0.01"
-                    value={editForm.vouchers}
-                    onChange={(e) => setEditForm({ ...editForm, vouchers: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-advances">Adiantamento (R$)</Label>
-                  <Input
-                    id="edit-advances"
-                    type="number"
-                    step="0.01"
-                    value={editForm.advances}
-                    onChange={(e) => setEditForm({ ...editForm, advances: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-inss">INSS (R$)</Label>
-                  <Input
-                    id="edit-inss"
-                    type="number"
-                    step="0.01"
-                    value={editForm.inss}
-                    onChange={(e) => setEditForm({ ...editForm, inss: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="edit-fgts">FGTS (R$)</Label>
-                  <Input
-                    id="edit-fgts"
-                    type="number"
-                    step="0.01"
-                    value={editForm.fgts}
-                    onChange={(e) => setEditForm({ ...editForm, fgts: e.target.value })}
-                  />
+
+                <div className="rounded-lg border p-4 space-y-3">
+                  <h4 className="font-semibold text-sm">FGTS (informativo)</h4>
+                  <div className="space-y-2">
+                    <Label htmlFor="edit-fgts">FGTS (R$)</Label>
+                    <Input
+                      id="edit-fgts"
+                      type="number"
+                      step="0.01"
+                      value={editForm.fgts}
+                      onChange={(e) => setEditForm({ ...editForm, fgts: e.target.value })}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -1105,7 +1247,11 @@ const handleCreatePayroll = async () => {
                 <Label>Classificacao</Label>
                 <Select
                   value={editForm.paymentType}
-                  onValueChange={(value: 'contabil' | 'nao_contabil') => setEditForm({ ...editForm, paymentType: value })}
+                  onValueChange={(value: 'contabil' | 'nao_contabil') => {
+                    if (value !== editForm.paymentType) {
+                      setEditForm({ ...editForm, paymentType: value })
+                    }
+                  }}
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -1125,7 +1271,7 @@ const handleCreatePayroll = async () => {
                 <p className="text-xs text-muted-foreground">Adicione proventos ou descontos extras (ex: Gratificacao, Quebra de Caixa)</p>
                 
                 {/* Add Event Form */}
-                <div className="grid gap-2 md:grid-cols-4 items-end">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2 items-end">
                   <div className="space-y-1 md:col-span-2">
                     <Label className="text-xs">Descricao</Label>
                     <Input
@@ -1139,7 +1285,11 @@ const handleCreatePayroll = async () => {
                     <Label className="text-xs">Tipo</Label>
                     <Select
                       value={newEventForm.type}
-                      onValueChange={(value: 'provento' | 'desconto') => setNewEventForm({ ...newEventForm, type: value })}
+                      onValueChange={(value: 'provento' | 'desconto') => {
+                        if (value !== newEventForm.type) {
+                          setNewEventForm({ ...newEventForm, type: value })
+                        }
+                      }}
                     >
                       <SelectTrigger className="h-9">
                         <SelectValue />
@@ -1330,7 +1480,12 @@ const handleCreatePayroll = async () => {
                     <Label>Competencia (Mes)</Label>
                     <Select
                       value={newForm.month.toString()}
-                      onValueChange={(value) => setNewForm({ ...newForm, month: parseInt(value) })}
+                      onValueChange={(value) => {
+                        const next = parseInt(value)
+                        if (next !== newForm.month) {
+                          setNewForm({ ...newForm, month: next })
+                        }
+                      }}
                     >
                       <SelectTrigger className="w-full">
                         <SelectValue />
@@ -1359,7 +1514,11 @@ const handleCreatePayroll = async () => {
                   <Label>Classificacao</Label>
                   <Select
                     value={newForm.paymentType}
-                    onValueChange={(value: 'contabil' | 'nao_contabil') => setNewForm({ ...newForm, paymentType: value })}
+                    onValueChange={(value: 'contabil' | 'nao_contabil') => {
+                      if (value !== newForm.paymentType) {
+                        setNewForm({ ...newForm, paymentType: value })
+                      }
+                    }}
                   >
                     <SelectTrigger className="w-full">
                       <SelectValue />
@@ -1511,7 +1670,11 @@ const handleCreatePayroll = async () => {
                 <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2">
                   <Select
                     value={newPayrollEventForm.type}
-                    onValueChange={(value: 'provento' | 'desconto') => setNewPayrollEventForm({ ...newPayrollEventForm, type: value })}
+                    onValueChange={(value: 'provento' | 'desconto') => {
+                      if (value !== newPayrollEventForm.type) {
+                        setNewPayrollEventForm({ ...newPayrollEventForm, type: value })
+                      }
+                    }}
                   >
                     <SelectTrigger className="w-full sm:w-[140px]">
                       <SelectValue />
