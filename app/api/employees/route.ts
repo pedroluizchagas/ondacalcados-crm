@@ -21,9 +21,10 @@ export async function POST(request: Request) {
     return NextResponse.json(employee, { status: 201 })
   } catch (error) {
     console.error('Error creating employee:', error)
-    return NextResponse.json(
-      { error: 'Failed to create employee' },
-      { status: 500 }
-    )
+    const msg = error instanceof Error ? error.message : ''
+    if (msg === 'unauthorized') {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    return NextResponse.json({ error: 'Failed to create employee' }, { status: 500 })
   }
 }

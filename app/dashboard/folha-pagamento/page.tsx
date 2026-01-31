@@ -210,6 +210,15 @@ export default function FolhaPagamentoPage() {
     return years
   }, [payrolls])
 
+  const yearOptions = useMemo(() => {
+    const set = new Set<number>(availableYears)
+    if (yearFilter !== 'all') {
+      const yf = parseInt(yearFilter, 10)
+      if (!Number.isNaN(yf)) set.add(yf)
+    }
+    return Array.from(set).sort((a, b) => b - a)
+  }, [availableYears, yearFilter])
+
   const activeEmployees = useMemo(() => {
     return (employees || []).filter(e => e.status === 'active')
   }, [employees])
@@ -685,7 +694,7 @@ const handleCreatePayroll = async () => {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos os Anos</SelectItem>
-                {availableYears.map((year) => (
+                {yearOptions.map((year) => (
                   <SelectItem key={year} value={year.toString()}>
                     {year}
                   </SelectItem>

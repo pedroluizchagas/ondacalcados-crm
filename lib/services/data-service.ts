@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/admin'
 import type { 
   Store, 
   Position, 
@@ -226,7 +227,22 @@ export async function getEmployee(id: string): Promise<Employee | null> {
 
 export async function createEmployee(employee: Omit<Employee, 'id'>): Promise<Employee> {
   const supabase = await createClient()
-  const { data, error } = await supabase
+  const { data: authData } = await supabase.auth.getUser()
+  const userId = authData?.user?.id
+  if (!userId) throw new Error('unauthorized')
+  const admin = createServiceClient()
+  let salaryValue = employee.salary
+  if (salaryValue === undefined || salaryValue === null) {
+    if (employee.positionId) {
+      const { data: pos } = await supabase
+        .from('positions')
+        .select('base_salary')
+        .eq('id', employee.positionId)
+        .single()
+      salaryValue = pos?.base_salary ?? null
+    }
+  }
+  const { data, error } = await admin
     .from('employees')
     .insert({
       name: employee.name,
@@ -237,7 +253,7 @@ export async function createEmployee(employee: Omit<Employee, 'id'>): Promise<Em
       department: employee.department,
       store_id: employee.storeId || employee.store,
       position_id: employee.positionId,
-      salary: employee.salary,
+      salary: salaryValue,
       hire_date: employee.hireDate,
       birth_date: employee.birthDate,
       status: employee.status,
