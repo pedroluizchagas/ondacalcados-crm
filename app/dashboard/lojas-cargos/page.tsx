@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { mockPositions, mockStores, mockEmployees, getStoreName } from '@/lib/mock-data'
+import { usePositions, useStores, useEmployees, createStore as apiCreateStore, updateStore as apiUpdateStore, deleteStore as apiDeleteStore, createPosition as apiCreatePosition, updatePosition as apiUpdatePosition, deletePosition as apiDeletePosition } from '@/hooks/use-data'
 import type { Position, Store } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,16 +42,15 @@ import { Search, Plus, MoreHorizontal, Pencil, Trash2, Loader2, Briefcase, Users
 import { useToast } from '@/hooks/use-toast'
 
 export default function LojasCargosPage() {
-  // Stores state
-  const [stores, setStores] = useState<Store[]>(mockStores)
+  const { stores, mutate: mutateStores } = useStores()
   const [storeSearchTerm, setStoreSearchTerm] = useState('')
   const [isNewStoreOpen, setIsNewStoreOpen] = useState(false)
   const [isEditStoreOpen, setIsEditStoreOpen] = useState(false)
   const [isDeleteStoreOpen, setIsDeleteStoreOpen] = useState(false)
   const [selectedStore, setSelectedStore] = useState<Store | null>(null)
 
-  // Positions state
-  const [positions, setPositions] = useState<Position[]>(mockPositions)
+  const { positions, mutate: mutatePositions } = usePositions()
+  const { employees } = useEmployees()
   const [searchTerm, setSearchTerm] = useState('')
   const [storeFilter, setStoreFilter] = useState<string>('all')
   const [isNewOpen, setIsNewOpen] = useState(false)
@@ -79,13 +78,13 @@ export default function LojasCargosPage() {
   // Stats
   const stats = useMemo(() => {
     const totalPositions = positions.length
-    const avgSalary = positions.reduce((sum, p) => sum + p.baseSalary, 0) / positions.length || 0
+    const avgSalary = positions.reduce((sum, p: any) => sum + Number((p as any)?.baseSalary ?? (p as any)?.base_salary ?? 0), 0) / (positions.length || 1)
     const totalStores = stores.length
     const totalEmployeesInPositions = positions.reduce((sum, p) => {
-      return sum + mockEmployees.filter(e => e.positionId === p.id && e.status === 'active').length
+      return sum + (employees || []).filter((e: any) => ((e as any).positionId || (e as any).position_id) === (p as any).id && (e as any).status === 'active').length
     }, 0)
     return { totalPositions, avgSalary, totalStores, totalEmployeesInPositions }
-  }, [positions, stores])
+  }, [positions, stores, employees])
 
   // Filtered data
   const filteredStores = useMemo(() => {
@@ -112,11 +111,11 @@ export default function LojasCargosPage() {
   }
 
   const getEmployeeCount = (positionId: string) => {
-    return mockEmployees.filter(e => e.positionId === positionId && e.status === 'active').length
+    return (employees || []).filter((e: any) => ((e as any).positionId || (e as any).position_id) === positionId && (e as any).status === 'active').length
   }
 
   const getStoreEmployeeCount = (storeId: string) => {
-    return mockEmployees.filter(e => e.storeId === storeId && e.status === 'active').length
+    return (employees || []).filter((e: any) => ((e as any).storeId || (e as any).store_id) === storeId && (e as any).status === 'active').length
   }
 
   // Store handlers
@@ -150,16 +149,12 @@ export default function LojasCargosPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    const newStore: Store = {
-      id: `store-${Date.now()}`,
+    await apiCreateStore({
       name: storeFormData.name,
       cnpj: storeFormData.cnpj,
       city: storeFormData.city || undefined,
-    }
-
-    setStores([...stores, newStore])
+    } as any)
+    await mutateStores()
     setIsSubmitting(false)
     setIsNewStoreOpen(false)
     resetStoreForm()
@@ -180,18 +175,12 @@ export default function LojasCargosPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    setStores(stores.map(s =>
-      s.id === selectedStore.id
-        ? {
-            ...s,
-            name: storeFormData.name,
-            cnpj: storeFormData.cnpj,
-            city: storeFormData.city || undefined,
-          }
-        : s
-    ))
+    await apiUpdateStore(String(selectedStore.id), {
+      name: storeFormData.name,
+      cnpj: storeFormData.cnpj,
+      city: storeFormData.city || undefined,
+    } as any)
+    await mutateStores()
 
     setIsSubmitting(false)
     setIsEditStoreOpen(false)
@@ -218,9 +207,8 @@ export default function LojasCargosPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    setStores(stores.filter(s => s.id !== selectedStore.id))
+    await apiDeleteStore(String(selectedStore.id))
+    await mutateStores()
     setIsSubmitting(false)
     setIsDeleteStoreOpen(false)
     setSelectedStore(null)
@@ -262,17 +250,13 @@ export default function LojasCargosPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    const newPosition: Position = {
-      id: `pos-${Date.now()}`,
+    await apiCreatePosition({
       name: formData.name,
       baseSalary: parseFloat(formData.baseSalary),
       storeId: formData.storeId,
       description: formData.description || undefined,
-    }
-
-    setPositions([...positions, newPosition])
+    } as any)
+    await mutatePositions()
     setIsSubmitting(false)
     setIsNewOpen(false)
     resetForm()
@@ -293,20 +277,13 @@ export default function LojasCargosPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    const updatedPositions = positions.map(p =>
-      p.id === selectedPosition.id
-        ? {
-            ...p,
-            name: formData.name,
-            baseSalary: parseFloat(formData.baseSalary),
-            storeId: formData.storeId,
-            description: formData.description || undefined,
-          }
-        : p
-    )
-    setPositions(updatedPositions)
+    await apiUpdatePosition(String(selectedPosition.id), {
+      name: formData.name,
+      baseSalary: parseFloat(formData.baseSalary),
+      storeId: formData.storeId,
+      description: formData.description || undefined,
+    } as any)
+    await mutatePositions()
 
     setIsSubmitting(false)
     setIsEditOpen(false)
@@ -333,9 +310,8 @@ export default function LojasCargosPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    setPositions(positions.filter(p => p.id !== selectedPosition.id))
+    await apiDeletePosition(String(selectedPosition.id))
+    await mutatePositions()
     setIsSubmitting(false)
     setIsDeleteOpen(false)
     setSelectedPosition(null)
@@ -548,10 +524,10 @@ export default function LojasCargosPage() {
                           </div>
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline">{position.storeId ? getStoreName(position.storeId) : '-'}</Badge>
+                          <Badge variant="outline">{(position as any).storeId || (position as any).store_id ? (stores.find(s => (s as any).id === ((position as any).storeId || (position as any).store_id))?.name || '-') : '-'}</Badge>
                         </TableCell>
                         <TableCell className="font-semibold text-primary">
-                          {formatCurrency(position.baseSalary)}
+                          {formatCurrency(Number((position as any)?.baseSalary ?? (position as any)?.base_salary ?? 0))}
                         </TableCell>
                         <TableCell className="hidden md:table-cell text-muted-foreground max-w-[200px] truncate">
                           {position.description || '-'}

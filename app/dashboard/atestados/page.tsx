@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { useState, useMemo } from 'react'
-import { mockMedicalCertificates, mockEmployees, mockStores, getStoreName } from '@/lib/mock-data'
+import { useMedicalCertificates, useEmployees, useStores, createMedicalCertificate as apiCreateMedicalCertificate } from '@/hooks/use-data'
 import type { MedicalCertificate } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,7 +40,9 @@ import { Plus, Search, FileText, Calendar, Clock, Loader2 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
 
 export default function AtestadosPage() {
-  const [certificates, setCertificates] = useState<MedicalCertificate[]>(mockMedicalCertificates)
+  const { certificates, mutate: mutateCertificates } = useMedicalCertificates()
+  const { employees } = useEmployees()
+  const { stores } = useStores()
   const [searchTerm, setSearchTerm] = useState('')
   const [storeFilter, setStoreFilter] = useState<string>('all')
   const [isFormOpen, setIsFormOpen] = useState(false)
@@ -56,7 +58,7 @@ export default function AtestadosPage() {
     notes: '',
   })
 
-  const activeEmployees = mockEmployees.filter((e) => e.status !== 'terminated')
+  const activeEmployees = (employees || []).filter((e: any) => (e as any).status !== 'terminated')
 
   const stats = useMemo(() => {
     const today = new Date()
@@ -81,14 +83,14 @@ export default function AtestadosPage() {
 
   const filteredCertificates = useMemo(() => {
     return certificates.filter((cert) => {
-      const employee = mockEmployees.find((e) => e.id === cert.employeeId)
+      const employee = (employees || []).find((e: any) => e.id === ((cert as any).employeeId || (cert as any).employee_id))
       const matchesSearch = cert.employeeName
         .toLowerCase()
         .includes(searchTerm.toLowerCase())
-      const matchesStore = storeFilter === 'all' || employee?.storeId === storeFilter
+      const matchesStore = storeFilter === 'all' || ((employee as any)?.storeId || (employee as any)?.store_id) === storeFilter
       return matchesSearch && matchesStore
     }).sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime())
-  }, [certificates, searchTerm, storeFilter])
+  }, [certificates, employees, searchTerm, storeFilter])
 
   const getInitials = (name: string) => {
     return name
@@ -117,7 +119,7 @@ export default function AtestadosPage() {
     e.preventDefault()
     setIsSubmitting(true)
 
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, 200))
 
     const employee = activeEmployees.find((emp) => emp.id === formData.employeeId)
     if (!employee) {
@@ -136,18 +138,14 @@ export default function AtestadosPage() {
       return
     }
 
-    const newCertificate: MedicalCertificate = {
-      id: String(certificates.length + 1),
+    await apiCreateMedicalCertificate({
       employeeId: formData.employeeId,
-      employeeName: employee.name,
       startDate: formData.startDate,
       days: daysNumber,
       cid: formData.cid || undefined,
       notes: formData.notes || undefined,
-      createdAt: new Date().toISOString().split('T')[0],
-    }
-
-    setCertificates([newCertificate, ...certificates])
+    } as any)
+    await mutateCertificates()
     setIsFormOpen(false)
     resetForm()
     setIsSubmitting(false)
@@ -155,6 +153,11 @@ export default function AtestadosPage() {
       title: 'Atestado registrado',
       description: `Atestado de ${employee.name} foi registrado com sucesso.`,
     })
+  }
+
+  const getStoreName = (storeId: string) => {
+    const s = stores.find(st => (st as any).id === storeId)
+    return s?.name || 'N/A'
   }
 
   return (
@@ -370,7 +373,7 @@ export default function AtestadosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as Lojas</SelectItem>
-                {mockStores.map((store) => (
+                {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id}>
                     {store.name}
                   </SelectItem>
@@ -400,8 +403,8 @@ export default function AtestadosPage() {
             </TableHeader>
             <TableBody>
               {filteredCertificates.length > 0 ? (
-                filteredCertificates.map((cert) => {
-                  const employee = mockEmployees.find((e) => e.id === cert.employeeId)
+                filteredCertificates.map((cert: any) => {
+                  const employee = (employees || []).find((e: any) => e.id === ((cert as any).employeeId || (cert as any).employee_id))
                   return (
                     <TableRow key={cert.id}>
                       <TableCell>
@@ -415,7 +418,7 @@ export default function AtestadosPage() {
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">
-                        <Badge variant="outline">{employee ? getStoreName(employee.storeId) : 'N/A'}</Badge>
+                        <Badge variant="outline">{employee ? getStoreName(String((employee as any).storeId || (employee as any).store_id)) : 'N/A'}</Badge>
                       </TableCell>
                       <TableCell>
                         {formatDate(cert.startDate)}

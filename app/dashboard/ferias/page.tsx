@@ -2,7 +2,7 @@
 
 import React from 'react'
 import { useState, useMemo } from 'react'
-import { mockVacations, mockEmployees, mockStores, getVacationAlertLevel, getStoreName } from '@/lib/mock-data'
+import { useVacations, useEmployees, useStores, createVacation as apiCreateVacation } from '@/hooks/use-data'
 import type { Vacation } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -46,7 +46,9 @@ const statusMap: Record<Vacation['status'], { label: string; variant: 'default' 
 }
 
 export default function FeriasPage() {
-  const [vacations, setVacations] = useState<Vacation[]>(mockVacations)
+  const { vacations, mutate: mutateVacations } = useVacations()
+  const { employees } = useEmployees()
+  const { stores } = useStores()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [storeFilter, setStoreFilter] = useState<string>('all')
@@ -64,11 +66,34 @@ export default function FeriasPage() {
     acquisitionPeriodEnd: '',
   })
 
-  const activeEmployees = mockEmployees.filter((e) => e.status !== 'terminated')
+  const activeEmployees = (employees || []).filter((e: any) => (e as any).status !== 'terminated')
 
   const employeesWithAlerts = useMemo(() => {
     return activeEmployees.map((emp) => {
-      const alert = getVacationAlertLevel(emp, vacations)
+      const today = new Date()
+      const hasVacation = (vacations || []).some((v: any) => (((v as any).employeeId || (v as any).employee_id) === emp.id) && (((v as any).status === 'scheduled') || ((v as any).status === 'in-progress') || ((v as any).status === 'completed')))
+      const getVacationDeadline = (hireDate: string): Date => {
+        const hire = new Date(hireDate)
+        let periodStart = new Date(hire)
+        while (periodStart < today) {
+          periodStart.setFullYear(periodStart.getFullYear() + 1)
+        }
+        periodStart.setFullYear(periodStart.getFullYear() - 1)
+        const deadline = new Date(periodStart)
+        deadline.setFullYear(deadline.getFullYear() + 2)
+        return deadline
+      }
+      const alert = (() => {
+        if (hasVacation) return { level: 'ok', daysUntilDeadline: 999 } as any
+        const hd = (emp as any).hireDate || (emp as any).hire_date
+        const deadline = getVacationDeadline(hd)
+        const diffTime = deadline.getTime() - today.getTime()
+        const daysUntilDeadline = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+        if (daysUntilDeadline <= 15) return { level: 'critical', daysUntilDeadline }
+        if (daysUntilDeadline <= 30) return { level: 'attention', daysUntilDeadline }
+        if (daysUntilDeadline <= 60) return { level: 'planning', daysUntilDeadline }
+        return { level: 'ok', daysUntilDeadline }
+      })()
       return { ...emp, vacationAlert: alert }
     })
   }, [activeEmployees, vacations])
@@ -88,16 +113,14 @@ export default function FeriasPage() {
   }, [vacations, employeesWithAlerts])
 
   const filteredVacations = useMemo(() => {
-    return vacations.filter((vacation) => {
-      const employee = mockEmployees.find((e) => e.id === vacation.employeeId)
-      const matchesSearch = vacation.employeeName
-        .toLowerCase()
-        .includes(searchTerm.toLowerCase())
+    return vacations.filter((vacation: any) => {
+      const employee = (employees || []).find((e: any) => e.id === ((vacation as any).employeeId || (vacation as any).employee_id))
+      const matchesSearch = String(vacation.employeeName || '').toLowerCase().includes(searchTerm.toLowerCase())
       const matchesStatus = statusFilter === 'all' || vacation.status === statusFilter
-      const matchesStore = storeFilter === 'all' || employee?.storeId === storeFilter
+      const matchesStore = storeFilter === 'all' || ((employee as any)?.storeId || (employee as any)?.store_id) === storeFilter
       return matchesSearch && matchesStatus && matchesStore
     })
-  }, [vacations, searchTerm, statusFilter, storeFilter])
+  }, [vacations, employees, searchTerm, statusFilter, storeFilter])
 
   const getInitials = (name: string) => {
     return name
@@ -140,7 +163,7 @@ export default function FeriasPage() {
     e.preventDefault()
     setIsSubmitting(true)
 
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await new Promise((resolve) => setTimeout(resolve, 200))
 
     const employee = activeEmployees.find((emp) => emp.id === formData.employeeId)
     if (!employee) {
@@ -159,10 +182,8 @@ export default function FeriasPage() {
       return
     }
 
-    const newVacation: Vacation = {
-      id: String(vacations.length + 1),
+    await apiCreateVacation({
       employeeId: formData.employeeId,
-      employeeName: employee.name,
       startDate: formData.startDate,
       endDate: formData.endDate,
       days: calculateDays(formData.startDate, formData.endDate),
@@ -170,9 +191,8 @@ export default function FeriasPage() {
       status: 'scheduled',
       acquisitionPeriodStart: formData.acquisitionPeriodStart,
       acquisitionPeriodEnd: formData.acquisitionPeriodEnd,
-    }
-
-    setVacations([...vacations, newVacation])
+    } as any)
+    await mutateVacations()
     setIsFormOpen(false)
     resetForm()
     setIsSubmitting(false)
@@ -180,6 +200,11 @@ export default function FeriasPage() {
       title: 'Ferias agendadas',
       description: `Ferias de ${employee.name} foram agendadas com sucesso.`,
     })
+  }
+
+  const getStoreName = (storeId: string) => {
+    const s = stores.find(st => (st as any).id === storeId)
+    return s?.name || 'N/A'
   }
 
   return (
@@ -453,7 +478,7 @@ export default function FeriasPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as Lojas</SelectItem>
-                {mockStores.map((store) => (
+                {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id}>
                     {store.name}
                   </SelectItem>
@@ -481,8 +506,8 @@ export default function FeriasPage() {
             </TableHeader>
             <TableBody>
               {filteredVacations.length > 0 ? (
-                filteredVacations.map((vacation) => {
-                  const employee = mockEmployees.find((e) => e.id === vacation.employeeId)
+                filteredVacations.map((vacation: any) => {
+                  const employee = (employees || []).find((e: any) => e.id === ((vacation as any).employeeId || (vacation as any).employee_id))
                   return (
                     <TableRow key={vacation.id}>
                       <TableCell>
@@ -496,7 +521,7 @@ export default function FeriasPage() {
                         </div>
                       </TableCell>
                       <TableCell className="hidden md:table-cell">
-                        <Badge variant="outline">{employee ? getStoreName(employee.storeId) : 'N/A'}</Badge>
+                        <Badge variant="outline">{employee ? getStoreName(String((employee as any).storeId || (employee as any).store_id)) : 'N/A'}</Badge>
                       </TableCell>
                       <TableCell>
                         <div className="text-sm">

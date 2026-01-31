@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Separator } from '@/components/ui/separator'
 import { Mail, Phone, MapPin, Building, Calendar, DollarSign, AlertCircle, Store, Briefcase } from 'lucide-react'
-import { getStoreName, getPositionName, getBaseSalary } from '@/lib/mock-data'
+import { useStores, usePositions } from '@/hooks/use-data'
 
 interface EmployeeProfileProps {
   employee: Employee
@@ -19,6 +19,8 @@ const statusMap: Record<Employee['status'], { label: string; variant: 'default' 
 }
 
 export function EmployeeProfile({ employee }: EmployeeProfileProps) {
+  const { stores } = useStores()
+  const { positions } = usePositions()
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -39,6 +41,21 @@ export function EmployeeProfile({ employee }: EmployeeProfileProps) {
     return new Date(dateString).toLocaleDateString('pt-BR')
   }
 
+  const storeName = (() => {
+    const s = stores.find(st => (st as any).id === ((employee as any).storeId || (employee as any).store_id))
+    return s?.name || 'N/A'
+  })()
+
+  const positionName = (() => {
+    const p = positions.find(pp => (pp as any).id === ((employee as any).positionId || (employee as any).position_id))
+    return String(p?.name || 'N/A')
+  })()
+
+  const baseSalary = (() => {
+    const p = positions.find(pp => (pp as any).id === ((employee as any).positionId || (employee as any).position_id))
+    return Number((p as any)?.baseSalary ?? (p as any)?.base_salary ?? 0)
+  })()
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -50,7 +67,7 @@ export function EmployeeProfile({ employee }: EmployeeProfileProps) {
         </Avatar>
         <div>
           <h3 className="text-xl font-semibold">{employee.name}</h3>
-          <p className="text-muted-foreground">{getPositionName(employee.positionId)}</p>
+          <p className="text-muted-foreground">{positionName}</p>
           <Badge variant={statusMap[employee.status].variant} className="mt-1">
             {statusMap[employee.status].label}
           </Badge>
@@ -90,14 +107,14 @@ export function EmployeeProfile({ employee }: EmployeeProfileProps) {
             <Store className="h-4 w-4 text-muted-foreground" />
             <div>
               <p className="text-xs text-muted-foreground">Loja</p>
-              <p className="text-sm font-medium">{getStoreName(employee.storeId)}</p>
+              <p className="text-sm font-medium">{storeName}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <Briefcase className="h-4 w-4 text-muted-foreground" />
             <div>
               <p className="text-xs text-muted-foreground">Cargo</p>
-              <p className="text-sm font-medium">{getPositionName(employee.positionId)}</p>
+              <p className="text-sm font-medium">{positionName}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -111,7 +128,7 @@ export function EmployeeProfile({ employee }: EmployeeProfileProps) {
             <DollarSign className="h-4 w-4 text-muted-foreground" />
             <div>
               <p className="text-xs text-muted-foreground">Salario Base</p>
-              <p className="text-sm font-medium">{formatCurrency(getBaseSalary(employee.positionId))}</p>
+              <p className="text-sm font-medium">{formatCurrency(baseSalary)}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">

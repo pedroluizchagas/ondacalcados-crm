@@ -526,10 +526,14 @@ const handleCreatePayroll = async () => {
         throw new Error(err.error || 'Falha ao importar PDF')
       }
       const data = await res.json()
+      if (data?.month && data?.year) {
+        setMonthFilter(String(data.month))
+        setYearFilter(String(data.year))
+      }
       await mutatePayrolls()
       toast({
-        title: 'PDF importado',
-        description: `${data.updated} atualizado(s), ${data.created} criado(s) para ${data.month}/${data.year}.`,
+        title: 'Importação concluída',
+        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).`,
       })
     } catch (e: any) {
       toast({
@@ -704,7 +708,7 @@ const handleCreatePayroll = async () => {
               <SelectContent>
                 <SelectItem value="all">Todas as Lojas</SelectItem>
                 {stores.map((store) => (
-                  <SelectItem key={store.id} value={store.id}>
+                  <SelectItem key={store.id} value={String(store.id)}>
                     {store.name}
                   </SelectItem>
                 ))}

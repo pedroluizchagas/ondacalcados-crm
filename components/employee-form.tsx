@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Loader2 } from 'lucide-react'
-import { mockStores, mockPositions, getBaseSalary } from '@/lib/mock-data'
+import { useStores, usePositions } from '@/hooks/use-data'
 
 interface EmployeeFormProps {
   employee?: Employee
@@ -34,6 +34,8 @@ const departments = [
 
 export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const { stores } = useStores()
+  const { positions } = usePositions()
   const [formData, setFormData] = useState({
     name: employee?.name || '',
     email: employee?.email || '',
@@ -56,12 +58,13 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
 
   useEffect(() => {
     if (formData.positionId) {
-      const salary = getBaseSalary(formData.positionId)
+      const pos = positions.find(p => (p as any).id === formData.positionId)
+      const salary = Number((pos as any)?.baseSalary ?? (pos as any)?.base_salary ?? 0)
       setBaseSalary(salary)
     } else {
       setBaseSalary(0)
     }
-  }, [formData.positionId])
+  }, [formData.positionId, positions])
 
   const handleChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
@@ -176,7 +179,7 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
                 <SelectValue placeholder="Selecione a loja" />
               </SelectTrigger>
               <SelectContent>
-                {mockStores.map((store) => (
+                {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id}>
                     {store.name}
                   </SelectItem>
@@ -194,9 +197,9 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
                 <SelectValue placeholder="Selecione o cargo" />
               </SelectTrigger>
               <SelectContent>
-                {mockPositions.map((position) => (
+                {positions.map((position) => (
                   <SelectItem key={position.id} value={position.id}>
-                    {position.name} - {formatCurrency(position.baseSalary)}
+                    {String((position as any).name)} - {formatCurrency(Number((position as any)?.baseSalary ?? (position as any)?.base_salary ?? 0))}
                   </SelectItem>
                 ))}
               </SelectContent>

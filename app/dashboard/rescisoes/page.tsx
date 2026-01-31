@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { mockResignations, mockEmployees, mockStores, getStoreName } from '@/lib/mock-data'
+import { useResignations, useEmployees, useStores, createResignation as apiCreateResignation, deleteResignation as apiDeleteResignation } from '@/hooks/use-data'
 import type { Resignation } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -52,7 +52,9 @@ const reasonMap: Record<Resignation['reason'], { label: string; variant: 'defaul
 }
 
 export default function RescisoesPage() {
-  const [resignations, setResignations] = useState<Resignation[]>(mockResignations)
+  const { resignations, mutate: mutateResignations } = useResignations()
+  const { employees } = useEmployees()
+  const { stores } = useStores()
   const [searchTerm, setSearchTerm] = useState('')
   const [reasonFilter, setReasonFilter] = useState<string>('all')
   const [storeFilter, setStoreFilter] = useState<string>('all')
@@ -74,11 +76,11 @@ export default function RescisoesPage() {
 
   const stats = useMemo(() => {
     const total = resignations.length
-    const totalAmount = resignations.reduce((sum, r) => sum + r.totalAmount, 0)
+    const totalAmount = resignations.reduce((sum, r: any) => sum + Number((r as any)?.totalAmount ?? (r as any)?.total_amount ?? 0), 0)
     const currentMonth = new Date().getMonth()
     const currentYear = new Date().getFullYear()
     const thisMonth = resignations.filter(r => {
-      const date = new Date(r.exitDate)
+      const date = new Date((r as any).exitDate || (r as any).exit_date)
       return date.getMonth() === currentMonth && date.getFullYear() === currentYear
     }).length
     const byReason = Object.entries(reasonMap).map(([reason, config]) => ({
@@ -99,8 +101,8 @@ export default function RescisoesPage() {
   }, [resignations, searchTerm, reasonFilter, storeFilter])
 
   const activeEmployees = useMemo(() => {
-    return mockEmployees.filter(e => e.status === 'active')
-  }, [])
+    return (employees || []).filter((e: any) => (e as any).status === 'active')
+  }, [employees])
 
   const formatCurrency = (value: number) => {
     return new Intl.NumberFormat('pt-BR', {
@@ -134,24 +136,20 @@ export default function RescisoesPage() {
     }
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
+    await new Promise(resolve => setTimeout(resolve, 200))
 
-    const employee = mockEmployees.find(e => e.id === formData.employeeId)
+    const employee = (employees || []).find((e: any) => e.id === formData.employeeId)
     if (!employee) return
 
-    const newResignation: Resignation = {
-      id: `res-${Date.now()}`,
+    await apiCreateResignation({
       employeeId: employee.id,
-      employeeName: employee.name,
-      storeId: employee.storeId,
+      storeId: (employee as any).storeId || (employee as any).store_id,
       exitDate: formData.exitDate,
       reason: formData.reason as Resignation['reason'],
       totalAmount: parseFloat(formData.totalAmount),
       notes: formData.notes || undefined,
-      createdAt: new Date().toISOString().split('T')[0],
-    }
-
-    setResignations([...resignations, newResignation])
+    } as any)
+    await mutateResignations()
     setIsSubmitting(false)
     setIsNewOpen(false)
     resetForm()
@@ -175,9 +173,8 @@ export default function RescisoesPage() {
     if (!selectedResignation) return
 
     setIsSubmitting(true)
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    setResignations(resignations.filter(r => r.id !== selectedResignation.id))
+    await apiDeleteResignation(String(selectedResignation.id))
+    await mutateResignations()
     setIsSubmitting(false)
     setIsDeleteOpen(false)
     setSelectedResignation(null)
@@ -185,6 +182,11 @@ export default function RescisoesPage() {
       title: 'Rescisao excluida',
       description: 'O registro de rescisao foi excluido com sucesso.',
     })
+  }
+
+  const getStoreName = (storeId: string) => {
+    const s = stores.find(st => (st as any).id === storeId)
+    return s?.name || 'N/A'
   }
 
   return (
@@ -282,7 +284,7 @@ export default function RescisoesPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas as Lojas</SelectItem>
-                {mockStores.map((store) => (
+                {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id}>
                     {store.name}
                   </SelectItem>
@@ -309,7 +311,7 @@ export default function RescisoesPage() {
             </TableHeader>
             <TableBody>
               {filteredResignations.length > 0 ? (
-                filteredResignations.map((resignation) => (
+                filteredResignations.map((resignation: any) => (
                   <TableRow key={resignation.id}>
                     <TableCell>
                       <div className="flex items-center gap-2">
@@ -318,16 +320,16 @@ export default function RescisoesPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="outline">{getStoreName(resignation.storeId)}</Badge>
+                      <Badge variant="outline">{getStoreName(String((resignation as any).storeId || (resignation as any).store_id))}</Badge>
                     </TableCell>
-                    <TableCell>{formatDate(resignation.exitDate)}</TableCell>
+                    <TableCell>{formatDate((resignation as any).exitDate || (resignation as any).exit_date)}</TableCell>
                     <TableCell>
                       <Badge variant={reasonMap[resignation.reason].variant}>
                         {reasonMap[resignation.reason].label}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right font-semibold text-primary">
-                      {formatCurrency(resignation.totalAmount)}
+                      {formatCurrency(Number((resignation as any)?.totalAmount ?? (resignation as any)?.total_amount ?? 0))}
                     </TableCell>
                     <TableCell>
                       <DropdownMenu>

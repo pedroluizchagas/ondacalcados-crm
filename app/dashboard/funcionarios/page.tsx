@@ -2,7 +2,7 @@
 
 import React from "react"
 import { useState, useMemo } from 'react'
-import { mockEmployees, mockVacations, mockStores, getVacationAlertLevel, getStoreName, getPositionName, getBaseSalary } from '@/lib/mock-data'
+import { useEmployees, useVacations, useStores, usePositions, createEmployee as apiCreateEmployee, updateEmployee as apiUpdateEmployee } from '@/hooks/use-data'
 import type { Employee, VacationAlertLevel } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,7 +58,10 @@ const vacationAlertMap: Record<VacationAlertLevel, { label: string; color: strin
 }
 
 export default function FuncionariosPage() {
-  const [employees, setEmployees] = useState<Employee[]>(mockEmployees)
+  const { employees, mutate: mutateEmployees } = useEmployees()
+  const { vacations } = useVacations()
+  const { stores } = useStores()
+  const { positions } = usePositions()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [storeFilter, setStoreFilter] = useState<string>('all')
@@ -69,12 +72,59 @@ export default function FuncionariosPage() {
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null)
   const { toast } = useToast()
 
+  const getStoreName = (storeId: string) => {
+    const s = stores.find(st => (st as any).id === storeId)
+    return s?.name || 'N/A'
+  }
+
+  const getPositionName = (positionId: string) => {
+    const p = positions.find(pp => (pp as any).id === positionId)
+    return String(p?.name || 'N/A')
+  }
+
+  const getBaseSalary = (positionId: string) => {
+    const p = positions.find(pp => (pp as any).id === positionId)
+    return Number((p as any)?.baseSalary ?? (p as any)?.base_salary ?? 0)
+  }
+
+  const getVacationDeadline = (hireDate: string): Date => {
+    const hire = new Date(hireDate)
+    const today = new Date()
+    let periodStart = new Date(hire)
+    while (periodStart < today) {
+      periodStart.setFullYear(periodStart.getFullYear() + 1)
+    }
+    periodStart.setFullYear(periodStart.getFullYear() - 1)
+    const deadline = new Date(periodStart)
+    deadline.setFullYear(deadline.getFullYear() + 2)
+    return deadline
+  }
+
+  const getVacationAlertLevel = (employee: Employee, vacationsList: any[]): { level: VacationAlertLevel; daysUntilDeadline: number } => {
+    const today = new Date()
+    const hasVacation = vacationsList.some((v: any) =>
+      ((v as any).employeeId || (v as any).employee_id) === employee.id &&
+      (((v as any).status === 'scheduled') || ((v as any).status === 'in-progress') || ((v as any).status === 'completed'))
+    )
+    if (hasVacation) {
+      return { level: 'ok', daysUntilDeadline: 999 }
+    }
+    const hd = (employee as any).hireDate || (employee as any).hire_date
+    const deadline = getVacationDeadline(hd)
+    const diffTime = deadline.getTime() - today.getTime()
+    const daysUntilDeadline = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+    if (daysUntilDeadline <= 15) return { level: 'critical', daysUntilDeadline }
+    if (daysUntilDeadline <= 30) return { level: 'attention', daysUntilDeadline }
+    if (daysUntilDeadline <= 60) return { level: 'planning', daysUntilDeadline }
+    return { level: 'ok', daysUntilDeadline }
+  }
+
   const employeesWithAlerts = useMemo(() => {
-    return employees.map((emp) => {
-      const alert = getVacationAlertLevel(emp, mockVacations)
+    return (employees || []).map((emp: any) => {
+      const alert = getVacationAlertLevel(emp, vacations || [])
       return { ...emp, vacationAlert: alert }
     })
-  }, [employees])
+  }, [employees, vacations])
 
   const filteredEmployees = useMemo(() => {
     return employeesWithAlerts.filter((employee) => {
@@ -84,7 +134,7 @@ export default function FuncionariosPage() {
         employee.cpf.includes(searchTerm)
 
       const matchesStatus = statusFilter === 'all' || employee.status === statusFilter
-      const matchesStore = storeFilter === 'all' || employee.storeId === storeFilter
+      const matchesStore = storeFilter === 'all' || (employee.storeId || employee.store_id) === storeFilter
       const matchesVacationAlert = vacationAlertFilter === 'all' || employee.vacationAlert.level === vacationAlertFilter
 
       return matchesSearch && matchesStatus && matchesStore && matchesVacationAlert
@@ -107,50 +157,29 @@ export default function FuncionariosPage() {
     }).format(value)
   }
 
-  const handleAddEmployee = (data: Omit<Employee, 'id'>) => {
-    const newEmployee: Employee = {
-      ...data,
-      id: String(employees.length + 1),
-    }
-    setEmployees([...employees, newEmployee])
+  const handleAddEmployee = async (data: Omit<Employee, 'id'>) => {
+    await apiCreateEmployee(data as any)
+    await mutateEmployees()
     setIsFormOpen(false)
-    toast({
-      title: 'Funcionario cadastrado',
-      description: `${data.name} foi cadastrado com sucesso.`,
-    })
+    toast({ title: 'Funcionario cadastrado', description: `${data.name} foi cadastrado com sucesso.` })
   }
 
-  const handleEditEmployee = (data: Omit<Employee, 'id'>) => {
+  const handleEditEmployee = async (data: Omit<Employee, 'id'>) => {
     if (!editingEmployee) return
-    setEmployees(
-      employees.map((e) =>
-        e.id === editingEmployee.id ? { ...data, id: editingEmployee.id } : e
-      )
-    )
+    await apiUpdateEmployee(String(editingEmployee.id), data as any)
+    await mutateEmployees()
     setEditingEmployee(null)
-    toast({
-      title: 'Funcionario atualizado',
-      description: `${data.name} foi atualizado com sucesso.`,
-    })
+    toast({ title: 'Funcionario atualizado', description: `${data.name} foi atualizado com sucesso.` })
   }
 
-  const handleTerminate = (employee: Employee) => {
-    setEmployees(
-      employees.map((e) =>
-        e.id === employee.id
-          ? {
-              ...e,
-              status: 'terminated' as const,
-              terminationDate: new Date().toISOString().split('T')[0],
-              terminationReason: 'Desligamento pelo sistema',
-            }
-          : e
-      )
-    )
-    toast({
-      title: 'Funcionario desligado',
-      description: `${employee.name} foi desligado do sistema.`,
-    })
+  const handleTerminate = async (employee: Employee) => {
+    await apiUpdateEmployee(String(employee.id), {
+      status: 'terminated',
+      terminationDate: new Date().toISOString().split('T')[0],
+      terminationReason: 'Desligamento pelo sistema',
+    } as any)
+    await mutateEmployees()
+    toast({ title: 'Funcionario desligado', description: `${employee.name} foi desligado do sistema.` })
   }
 
   const renderVacationAlert = (alert: { level: VacationAlertLevel; daysUntilDeadline: number }) => {
@@ -225,7 +254,7 @@ export default function FuncionariosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todas Lojas</SelectItem>
-                {mockStores.map((store) => (
+                {stores.map((store) => (
                   <SelectItem key={store.id} value={store.id}>
                     {store.name}
                   </SelectItem>
@@ -281,11 +310,11 @@ export default function FuncionariosPage() {
                       </div>
                     </TableCell>
                     <TableCell className="hidden md:table-cell">
-                      <Badge variant="outline">{getStoreName(employee.storeId)}</Badge>
+                      <Badge variant="outline">{getStoreName(String((employee as any).storeId || (employee as any).store_id))}</Badge>
                     </TableCell>
-                    <TableCell className="hidden lg:table-cell">{getPositionName(employee.positionId)}</TableCell>
+                    <TableCell className="hidden lg:table-cell">{getPositionName(String((employee as any).positionId || (employee as any).position_id))}</TableCell>
                     <TableCell className="hidden xl:table-cell">
-                      {formatCurrency(getBaseSalary(employee.positionId))}
+                      {formatCurrency(getBaseSalary(String((employee as any).positionId || (employee as any).position_id)))}
                     </TableCell>
                     <TableCell>
                       <Badge variant={statusMap[employee.status].variant}>
