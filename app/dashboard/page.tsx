@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -578,6 +578,7 @@ export default function DashboardPage() {
                   return (
                     <div key={vacation.id} className="flex items-center gap-3">
                       <Avatar className="h-8 w-8">
+                        <AvatarImage src={(employee as any)?.avatarUrl || (employee as any)?.avatar_url || undefined} alt={employee?.name || 'Avatar'} />
                         <AvatarFallback className="text-xs">
                           {employee ? getInitials(employee.name) : '??'}
                         </AvatarFallback>
@@ -610,21 +611,25 @@ export default function DashboardPage() {
           <CardContent>
             {stats.birthdays.length > 0 ? (
               <div className="space-y-3">
-                {stats.birthdays.slice(0, 3).map((employee) => (
-                  <div key={employee.id} className="flex items-center gap-3">
-                    <Avatar className="h-8 w-8">
-                      <AvatarFallback className="text-xs">
-                        {getInitials(employee.name)}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{employee.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {employee.birth_date ? formatDate(employee.birth_date) : 'Data nao informada'}
-                      </p>
+                {stats.birthdays.slice(0, 3).map((employee) => {
+                  const fullEmployee = employees.find(e => e.id === employee.id)
+                  return (
+                    <div key={employee.id} className="flex items-center gap-3">
+                      <Avatar className="h-8 w-8">
+                        <AvatarImage src={(fullEmployee as any)?.avatarUrl || (fullEmployee as any)?.avatar_url || undefined} alt={employee.name} />
+                        <AvatarFallback className="text-xs">
+                          {getInitials(employee.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{employee.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {employee.birth_date ? formatDate(employee.birth_date) : 'Data nao informada'}
+                        </p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">Nenhum aniversariante este mes</p>

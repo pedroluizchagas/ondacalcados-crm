@@ -2,7 +2,7 @@
 
 import type { Employee } from '@/types'
 import { Badge } from '@/components/ui/badge'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Separator } from '@/components/ui/separator'
 import { Mail, Phone, MapPin, Building, Calendar, DollarSign, AlertCircle, Store, Briefcase } from 'lucide-react'
 import { useStores, usePositions } from '@/hooks/use-data'
@@ -61,6 +61,7 @@ export function EmployeeProfile({ employee }: EmployeeProfileProps) {
       {/* Header */}
       <div className="flex items-center gap-4">
         <Avatar className="h-16 w-16">
+          <AvatarImage src={(employee as any).avatarUrl || (employee as any).avatar_url || undefined} alt={employee.name} />
           <AvatarFallback className="bg-primary text-primary-foreground text-lg">
             {getInitials(employee.name)}
           </AvatarFallback>

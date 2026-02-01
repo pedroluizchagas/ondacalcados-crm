@@ -37,6 +37,8 @@ export interface Employee {
   birth_date?: string
   birthDate?: string
   status: 'active' | 'inactive' | 'vacation' | 'terminated'
+  avatar_url?: string
+  avatarUrl?: string
   address_street?: string
   address_number?: string
   address_city?: string

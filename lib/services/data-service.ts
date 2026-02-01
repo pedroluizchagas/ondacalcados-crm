@@ -177,6 +177,7 @@ export async function getEmployees(): Promise<Employee[]> {
     hireDate: e.hire_date,
     birthDate: e.birth_date,
     status: e.status,
+    avatarUrl: (e as any).avatar_url || undefined,
     address: {
       street: e.address_street || '',
       number: e.address_number || '',
@@ -213,6 +214,7 @@ export async function getEmployee(id: string): Promise<Employee | null> {
     hireDate: data.hire_date,
     birthDate: data.birth_date,
     status: data.status,
+    avatarUrl: (data as any).avatar_url || undefined,
     address: {
       street: data.address_street || '',
       number: data.address_number || '',
@@ -257,6 +259,7 @@ export async function createEmployee(employee: Omit<Employee, 'id'>): Promise<Em
       hire_date: employee.hireDate,
       birth_date: employee.birthDate,
       status: employee.status,
+      avatar_url: (employee as any).avatarUrl ?? (employee as any).avatar_url ?? null,
       address_street: employee.address?.street,
       address_number: employee.address?.number,
       address_city: employee.address?.city,
@@ -282,6 +285,7 @@ export async function createEmployee(employee: Omit<Employee, 'id'>): Promise<Em
     hireDate: data.hire_date,
     birthDate: data.birth_date,
     status: data.status,
+    avatarUrl: (data as any).avatar_url || undefined,
     address: {
       street: data.address_street || '',
       number: data.address_number || '',
@@ -310,6 +314,8 @@ export async function updateEmployee(id: string, employee: Partial<Employee>): P
   if (employee.status !== undefined) updateData.status = employee.status
   if (employee.terminationDate !== undefined) updateData.termination_date = employee.terminationDate
   if (employee.terminationReason !== undefined) updateData.termination_reason = employee.terminationReason
+  if ((employee as any).avatarUrl !== undefined) updateData.avatar_url = (employee as any).avatarUrl
+  if ((employee as any).avatar_url !== undefined) updateData.avatar_url = (employee as any).avatar_url
   if (employee.address) {
     updateData.address_street = employee.address.street
     updateData.address_number = employee.address.number
@@ -341,6 +347,7 @@ export async function updateEmployee(id: string, employee: Partial<Employee>): P
     hireDate: data.hire_date,
     birthDate: data.birth_date,
     status: data.status,
+    avatarUrl: (data as any).avatar_url || undefined,
     address: {
       street: data.address_street || '',
       number: data.address_number || '',

@@ -29,16 +29,15 @@ export async function updateSession(request: NextRequest) {
     },
   )
 
-  // Try to get user, but don't fail if network is unavailable
   let user = null
   try {
-    const { data } = await supabase.auth.getUser()
-    user = data.user
+    const { data: { session } } = await supabase.auth.getSession()
+    user = session?.user ?? null
   } catch {
-    // If getUser fails, check for session cookie as fallback
-    const sessionCookie = request.cookies.get('sb-gepvdujkbqfeplrhceox-auth-token')
-    if (sessionCookie) {
-      // Session cookie exists, allow access (will be validated on client)
+    const anyAuthCookie = request.cookies
+      .getAll()
+      .find(c => c.name.startsWith('sb-') && c.name.endsWith('-auth-token'))
+    if (anyAuthCookie) {
       user = { id: 'session-exists' } as any
     }
   }

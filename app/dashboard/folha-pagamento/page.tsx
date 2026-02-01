@@ -105,19 +105,59 @@ export default function FolhaPagamentoPage() {
   const [isSettlementOpen, setIsSettlementOpen] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
-  const filePdfInputRef = useRef<HTMLInputElement>(null)
-  const [isImportingPdf, setIsImportingPdf] = useState(false)
+  const fileSheetInputRef = useRef<HTMLInputElement>(null)
+  const [isImportingSheet, setIsImportingSheet] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
-    if (serverPayrolls && Array.isArray(serverPayrolls)) {
-      setPayrolls(serverPayrolls as ExtendedPayrollItem[])
+    if (!loadingPayrolls && Array.isArray(serverPayrolls)) {
+      const next = serverPayrolls as ExtendedPayrollItem[]
+      if (payrolls !== next) {
+        setPayrolls(next)
+      }
     }
-  }, [serverPayrolls])
+  }, [loadingPayrolls, serverPayrolls, payrolls])
 
   const getStoreName = (storeId: string) => {
     const s = stores.find(st => st.id === storeId || (st as any).id === storeId)
     return s?.name || 'N/A'
+  }
+
+  const handleSheetImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setIsImportingSheet(true)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      if (monthFilter !== 'all') form.append('month', monthFilter)
+      if (yearFilter !== 'all') form.append('year', yearFilter)
+      const res = await fetch('/api/payroll/import-sheet', { method: 'POST', body: form })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        const message = err?.error ? (err?.details ? `${err.error}: ${err.details}` : err.error) : 'Falha ao importar planilha'
+        throw new Error(message)
+      }
+      const data = await res.json()
+      if (data?.month && data?.year) {
+        setMonthFilter(String(data.month))
+        setYearFilter(String(data.year))
+      }
+      await mutatePayrolls()
+      toast({
+        title: 'Importação concluída',
+        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).${data.unmatchedCount ? ` Não vinculados: ${data.unmatchedCount}${Array.isArray(data.unmatched) ? ` (ex.: ${data.unmatched.map((u:any)=>u?.name||u?.cpf).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}${data.divergencesCount ? ` | Divergências de líquido: ${data.divergencesCount}${Array.isArray(data.divergences) ? ` (ex.: ${data.divergences.map((d:any)=>d?.name).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}`,
+      })
+    } catch (e: any) {
+      toast({
+        title: 'Erro ao importar planilha',
+        description: e?.message || 'Verifique o arquivo e tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsImportingSheet(false)
+      if (fileSheetInputRef.current) fileSheetInputRef.current.value = ''
+    }
   }
 
   const getPositionName = (positionId: string) => {
@@ -631,43 +671,6 @@ const handleCreatePayroll = async () => {
     })
   }
 
-  const handlePDFImport = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-    setIsImportingPdf(true)
-    try {
-      const form = new FormData()
-      form.append('file', file)
-      if (monthFilter !== 'all') form.append('month', monthFilter)
-      if (yearFilter !== 'all') form.append('year', yearFilter)
-      const res = await fetch('/api/payroll/import-pdf', { method: 'POST', body: form })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        const message = err?.error ? (err?.details ? `${err.error}: ${err.details}` : err.error) : 'Falha ao importar PDF'
-        throw new Error(message)
-      }
-      const data = await res.json()
-      if (data?.month && data?.year) {
-        setMonthFilter(String(data.month))
-        setYearFilter(String(data.year))
-      }
-      await mutatePayrolls()
-      toast({
-        title: 'Importação concluída',
-        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).${data.unmatchedCount ? ` Não vinculados: ${data.unmatchedCount}${Array.isArray(data.unmatched) ? ` (ex.: ${data.unmatched.map((u:any)=>u?.name||u?.cpf).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}${data.divergencesCount ? ` | Divergências de líquido: ${data.divergencesCount}${Array.isArray(data.divergences) ? ` (ex.: ${data.divergences.map((d:any)=>d?.name).filter(Boolean).slice(0,3).join(', ')})` : ''}` : ''}`,
-      })
-    } catch (e: any) {
-      toast({
-        title: 'Erro ao importar PDF',
-        description: e?.message || 'Verifique o arquivo e tente novamente.',
-        variant: 'destructive',
-      })
-    } finally {
-      setIsImportingPdf(false)
-      if (filePdfInputRef.current) filePdfInputRef.current.value = ''
-    }
-  }
-
   const getMonthName = (month: number) => {
     return months.find(m => m.value === month)?.label || ''
   }
@@ -682,14 +685,14 @@ const handleCreatePayroll = async () => {
         <div className="flex gap-2 flex-wrap">
           <input
             type="file"
-            accept=".pdf"
-            ref={filePdfInputRef}
-            onChange={handlePDFImport}
+            accept=".xlsx,.xls,.csv"
+            ref={fileSheetInputRef}
+            onChange={handleSheetImport}
             className="hidden"
           />
-          <Button variant="outline" onClick={() => filePdfInputRef.current?.click()} disabled={isImportingPdf}>
-            {isImportingPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-            Importar PDF
+          <Button variant="outline" onClick={() => fileSheetInputRef.current?.click()} disabled={isImportingSheet}>
+            {isImportingSheet ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
+            Importar XLSX/CSV
           </Button>
           <Button variant="outline" onClick={handlePrintReport}>
             <Printer className="mr-2 h-4 w-4" />
@@ -702,15 +705,14 @@ const handleCreatePayroll = async () => {
         </div>
       </div>
 
-      {/* PDF Import Info */}
       <Card className="bg-muted/50">
         <CardContent className="p-4">
           <div className="flex items-start gap-3">
             <FileText className="h-5 w-5 text-muted-foreground mt-0.5" />
             <div className="text-sm">
-              <p className="font-medium">Importacao via PDF:</p>
-              <p className="text-muted-foreground">O arquivo deve conter nome do funcionario e valores de Comissao, Compras, Imposto de Renda, INSS e FGTS.</p>
-              <p className="text-muted-foreground">Se houver CPF no PDF, o sistema usa para vinculo. Caso contrario, usa o nome.</p>
+              <p className="font-medium">Importacao via XLSX/XLS/CSV:</p>
+              <p className="text-muted-foreground">A planilha deve conter pelo menos a coluna Nome. Colunas como Base, Comissoes, Compras, IRRF, INSS, FGTS, Bruto, Descontos e Liquido sao aceitas. Rubricas adicionais sao aceitas como colunas e classificadas automaticamente.</p>
+              <p className="text-muted-foreground">CPF (se existir) e opcional; o vinculo e feito por Nome normalizado.</p>
             </div>
           </div>
         </CardContent>

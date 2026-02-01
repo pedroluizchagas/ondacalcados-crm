@@ -36,7 +36,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Plus, Search, MoreHorizontal, Eye, Pencil, UserX, AlertTriangle, AlertCircle, Info } from 'lucide-react'
 import { EmployeeForm } from '@/components/employee-form'
@@ -299,6 +299,7 @@ export default function FuncionariosPage() {
                     <TableCell>
                       <div className="flex items-center gap-3">
                         <Avatar className="h-9 w-9">
+                          <AvatarImage src={(employee as any).avatarUrl || (employee as any).avatar_url || undefined} alt={employee.name} />
                           <AvatarFallback className="bg-primary text-primary-foreground text-xs">
                             {getInitials(employee.name)}
                           </AvatarFallback>

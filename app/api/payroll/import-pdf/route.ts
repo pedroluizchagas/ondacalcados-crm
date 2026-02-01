@@ -18,6 +18,7 @@ function splitIntoReceipts(text: string): string[] {
   const blocks: string[] = []
   const patterns = [
     /Recibo\s+de\s+Pagamento\s+de\s+Sal(?:á|a)rio/gi,
+    /Recibo\s+de\s+Pagamento\s+de\s+Folha\s+Mensal/gi,
     /Holerite/gi,
     /Onda\s+Cal(?:ç|c)ados/gi,
   ]
@@ -41,8 +42,8 @@ function filterEmployerReceipts(receipts: string[]): string[] {
   const out: string[] = []
   for (const b of receipts) {
     const n = normalizeText(b)
-    const hasEmpregador = /via\s+do\s+empregador/.test(n)
-    const hasEmpregado = /via\s+do\s+empregado/.test(n)
+    const hasEmpregador = /\bvia\b.*\bempregador\b/.test(n)
+    const hasEmpregado = /\bvia\b.*\bempregado\b/.test(n)
     if (hasEmpregado && !hasEmpregador) continue
     if (hasEmpregador) out.push(b)
   }
@@ -108,6 +109,16 @@ function parseReceiptsWithDedup(text: string): ParsedRow[] {
   return dedup
 }
 
+function parseReceiptsTextRows(text: string): ParsedRow[] {
+  const receipts = filterEmployerReceipts(splitIntoReceipts(text))
+  const out: ParsedRow[] = []
+  for (const b of receipts) {
+    const r = parseRows(b)
+    if (r.length > 0) out.push(r[0])
+  }
+  return out
+}
+
 function parseMoney(input: string): number {
   const s = input.replace(/\s/g, '').replace(/\./g, '').replace(',', '.').replace(/[^\d\.-]/g, '')
   const n = parseFloat(s)
@@ -129,10 +140,14 @@ function detectCompetence(text: string): { month?: number; year?: number } {
     { rx: /novembro/i, value: 11 },
     { rx: /dezembro/i, value: 12 },
   ]
-  const m = text.match(/(\d{1,2})\s*[\/\-]\s*(\d{4})/)
-  if (m) {
-    const month = parseInt(m[1], 10)
-    const year = parseInt(m[2], 10)
+  const period = text.match(/(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4}).{0,40}?\b[aA]\b.{0,40}?(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4})/)
+  if (period) {
+    const m2 = parseInt(period[5], 10)
+    const y2 = parseInt(period[6], 10)
+    if (m2 >= 1 && m2 <= 12) return { month: m2, year: y2 }
+  }
+  const mmYYYY = Array.from(text.matchAll(/(\d{1,2})\s*[\/\-]\s*(\d{4})/g)).map(m => ({ month: parseInt(m[1], 10), year: parseInt(m[2], 10) }))
+  for (const { month, year } of mmYYYY) {
     if (month >= 1 && month <= 12) return { month, year }
   }
   for (const mm of months) {
@@ -184,7 +199,24 @@ function extractTextFromPdf2jsonData(data: any): string {
 
 function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
   try {
-    const pages = Array.isArray(data?.Pages) ? data.Pages : []
+    const allPages = Array.isArray(data?.Pages) ? data.Pages : []
+    const employerPages: any[] = []
+    for (const p of allPages) {
+      const parts: string[] = []
+      const texts = Array.isArray(p?.Texts) ? p.Texts : []
+      for (const t of texts) {
+        const runs = Array.isArray(t?.R) ? t.R : []
+        for (const r of runs) {
+          const s = r?.T ? decodeURIComponent(String(r.T).replace(/\+/g, '%20')) : ''
+          if (s) parts.push(s)
+        }
+      }
+      const pageText = normalizeText(parts.join(' '))
+      const isEmployer = /\bvia\b.*\bempregador\b/.test(pageText)
+      const isEmployee = /\bvia\b.*\bempregado\b/.test(pageText)
+      if (isEmployer && !isEmployee) employerPages.push(p)
+    }
+    const pages = employerPages.length > 0 ? employerPages : allPages
     const allRows: ParsedRow[] = []
     for (const p of pages) {
       const tokens: Array<{ x: number; y: number; s: string }> = []
@@ -207,6 +239,20 @@ function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
       const lines = Array.from(lineMap.entries())
         .sort((a, b) => a[0] - b[0])
         .map(([y, arr]) => ({ y, parts: arr.sort((a, b) => a.x - b.x) }))
+      let employeeName = ''
+      let employeeCpf = ''
+      for (const ln of lines.slice(0, 40)) {
+        const text = ln.parts.map(p => p.s).join(' ')
+        const n = normalizeText(text)
+        if (/empregad[oa]\s*[:\-]/.test(n)) {
+          const after = text.split(/empregad[oa]\s*[:\-]\s*/i)[1] || ''
+          employeeName = after.trim()
+        }
+        if (/\bcpf\b/.test(n)) {
+          const m = text.match(/\b\d{3}\.\d{3}\.\d{3}\-\d{2}\b|\b\d{11}\b/)
+          if (m) employeeCpf = m[0]
+        }
+      }
       // find header with "Rendimentos" and "Descontos"
       let xRend = NaN
       let xDesc = NaN
@@ -214,7 +260,7 @@ function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
       for (const ln of lines) {
         const text = ln.parts.map(p => p.s).join(' ')
         const n = normalizeText(text)
-        if (/\brendimentos\b/.test(n) && /\bdescontos?\b/.test(n)) {
+        if (/\bcodigo\b/.test(n) && /\bdescricao\b/.test(n) && /\breferencia\b/.test(n) && /\brendimentos\b/.test(n) && /\bdescontos?\b/.test(n)) {
           const rendTk = ln.parts.find(p => normalizeText(p.s).includes('rendimentos'))
           const descTk = ln.parts.find(p => normalizeText(p.s).includes('descontos'))
           if (rendTk && descTk) {
@@ -263,8 +309,11 @@ function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
         // build description from left side
         const desc = ln.parts.filter(p => p.x <= descXMax).map(p => p.s).join(' ').trim()
         if (!desc) continue
+        const nd = normalizeText(desc)
+        // skip non-event lines
+        if (/^codigo\b|^descricao\b|^referencia\b/.test(nd)) continue
         // check for FGTS informative in the line
-        if (/\bfgts\b|f\.?g\.?t\.?s/.test(normalizeText(desc))) {
+        if (/\bfgts\b|f\.?g\.?t\.?s/.test(nd)) {
           const valTk = [...ln.parts].reverse().find(p => moneyRx.test(p.s))
           if (valTk) fgts = parseMoney(valTk.s)
           continue
@@ -285,7 +334,6 @@ function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
           baseSalary = rendVal || baseSalary || descVal
           continue
         }
-        const nd = normalizeText(desc)
         if (/comiss/.test(nd) && rendVal > 0) {
           commissions += rendVal
           continue
@@ -334,6 +382,8 @@ function parseRowsStructuredFromPdfData(data: any): ParsedRow[] {
         }
       }
       const row: ParsedRow = {
+        name: employeeName || undefined,
+        cpf: employeeCpf || undefined,
         baseSalary: baseSalary || undefined,
         commissions: commissions || undefined,
         employeePurchases: purchases || undefined,
@@ -384,6 +434,7 @@ function parseRows(text: string): ParsedRow[] {
     const val = parseMoney(m[2])
     const nd = normalizeText(desc)
     if (/total|liquido/.test(nd)) continue
+    if (/recibo\s+de\s+pagamento|via\s+do\s+empregad|via\s+do\s+empregador|x[-\s]?nello|comercio|calcados|gerente|cargo|pagina|data\s+admissao|cnpj|cpf|ctps|serie|referencia|codigo|descricao/.test(nd)) continue
     const typeByRubrica = getRubricaTypeSync(desc)
     if (typeByRubrica === 'base') {
       base = base > 0 ? base : val
@@ -531,13 +582,30 @@ export async function POST(request: Request) {
     function mergeIdentity(structured: ParsedRow[], textRows: ParsedRow[]): ParsedRow[] {
       if (structured.length === 0) return textRows
       if (textRows.length === 0) return structured
+      if (structured.length === textRows.length) {
+        return structured.map((sr, i) => {
+          const tr = textRows[i]
+          if (!sr.name && tr?.name) sr.name = tr.name
+          if (!sr.cpf && tr?.cpf) sr.cpf = tr.cpf
+          return sr
+        })
+      }
       return structured.map(sr => {
-        if (!sr.name && textRows[0]?.name) sr.name = textRows[0].name
-        if (!sr.cpf && textRows[0]?.cpf) sr.cpf = textRows[0].cpf
+        const tr = textRows.find(t => {
+          const netMatch = typeof sr.pdfNet === 'number' && typeof t.pdfNet === 'number' && Math.abs((sr.pdfNet || 0) - (t.pdfNet || 0)) < 0.01
+          const grossMatch = typeof sr.pdfGross === 'number' && typeof t.pdfGross === 'number' && Math.abs((sr.pdfGross || 0) - (t.pdfGross || 0)) < 0.01
+          const baseMatch = typeof sr.baseSalary === 'number' && typeof t.baseSalary === 'number' && Math.abs((sr.baseSalary || 0) - (t.baseSalary || 0)) < 0.01
+          return netMatch || grossMatch || baseMatch
+        })
+        if (tr) {
+          if (!sr.name && tr.name) sr.name = tr.name
+          if (!sr.cpf && tr.cpf) sr.cpf = tr.cpf
+        }
         return sr
       })
     }
-    let rows = structuredRows.length > 0 ? mergeIdentity(structuredRows, parseReceiptsWithDedup(text)) : parseReceiptsWithDedup(text)
+    const textRowsPerReceipt = parseReceiptsTextRows(text)
+    let rows = structuredRows.length > 0 ? mergeIdentity(structuredRows, textRowsPerReceipt) : parseReceiptsWithDedup(text)
     // Attempt structured parse again using pdf2json if available in memory is not accessible; keep text-only for now.
     if (rows.length === 0) {
       return NextResponse.json({ error: 'Nao foi possivel extrair dados do PDF (layout nao reconhecido).' }, { status: 422 })

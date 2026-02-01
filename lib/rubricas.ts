@@ -34,60 +34,84 @@ const STATIC_RUBRICAS: Rubrica[] = [
 ]
 
 let cachedRubricas: Rubrica[] | null = null
+ 
+function catToType(cat: string): RubricaType {
+  const n = norm(cat)
+  if (n.includes('fgts')) return 'fgts'
+  if (n.includes('inss') || n.includes('irrf') || n.includes('imposto') || n.includes('desconto') || n.includes('vale') || n.includes('contribuicao')) return 'desconto'
+  if (n.includes('salario') || n.includes('base')) return 'base'
+  return 'provento'
+}
 
 export async function loadRubricas(): Promise<Rubrica[]> {
   if (cachedRubricas) return cachedRubricas
   try {
-    // Try to load from Excel file if available
-    const XLSXMod = await import('xlsx').catch(() => null as any)
     const pathMod = await import('node:path').catch(() => null as any)
     const fsMod = await import('node:fs').catch(() => null as any)
-    if (XLSXMod && pathMod && fsMod) {
-      const xlsPath = pathMod.resolve(process.cwd(), 'rubricas', 'Rubricas.xls')
-      const xlsxPath = pathMod.resolve(process.cwd(), 'rubricas', 'Rubricas.xlsx')
-      const filePath = fsMod.existsSync(xlsxPath) ? xlsxPath : xlsPath
-      if (!fsMod.existsSync(filePath)) {
-        cachedRubricas = [...STATIC_RUBRICAS]
-        return cachedRubricas
+    const list: Rubrica[] = []
+    if (pathMod && fsMod) {
+      const jsonPath = pathMod.resolve(process.cwd(), 'rubricas', 'solution', 'rubricas_mapping.json')
+      if (fsMod.existsSync(jsonPath)) {
+        try {
+          const raw = fsMod.readFileSync(jsonPath, 'utf-8')
+          const obj = JSON.parse(raw) as Record<string, string>
+          for (const [desc, cat] of Object.entries(obj)) {
+            const type = catToType(cat)
+            list.push({ description: desc, type, synonyms: [desc] })
+          }
+        } catch {}
       }
-      const wb = XLSXMod.readFile(filePath)
-      const sheetName = wb.SheetNames[0]
-      const sheet = wb.Sheets[sheetName]
-      const rows: any[] = XLSXMod.utils.sheet_to_json(sheet, { defval: '' })
-      const mapped: Rubrica[] = []
-      for (const row of rows) {
-        const code = String(row.Codigo || row.Código || row.codigo || row.code || '').trim()
-        const description = String(row.Descricao || row.Descrição || row.descricao || row.description || '').trim()
-        const typeRaw = String(row.Tipo || row.tipo || '').trim()
-        const synonymsRaw = String(row.Sinonimos || row.Sinônimos || row.sinonimos || row.synonyms || '').trim()
-        let type: RubricaType | undefined
-        if (typeRaw) {
-          const t = norm(typeRaw)
-          if (t.includes('provento') || t.includes('vencimento')) type = 'provento'
-          else if (t.includes('desconto')) type = 'desconto'
-          else if (t.includes('base')) type = 'base'
-          else if (t.includes('fgts')) type = 'fgts'
+      const XLSXMod = await import('xlsx').catch(() => null as any)
+      if (XLSXMod) {
+        const xlsPath = pathMod.resolve(process.cwd(), 'rubricas', 'Rubricas.xls')
+        const xlsxPath = pathMod.resolve(process.cwd(), 'rubricas', 'Rubricas.xlsx')
+        const filePath = fsMod.existsSync(xlsxPath) ? xlsxPath : xlsPath
+        if (fsMod.existsSync(filePath)) {
+          try {
+            const wb = XLSXMod.readFile(filePath)
+            const sheetName = wb.SheetNames[0]
+            const sheet = wb.Sheets[sheetName]
+            const rows: any[] = XLSXMod.utils.sheet_to_json(sheet, { defval: '' })
+            for (const row of rows) {
+              const code = String(row.Codigo || row.Código || row.codigo || row.code || '').trim()
+              const description = String(row.Descricao || row.Descrição || row.descricao || row.description || '').trim()
+              const typeRaw = String(row.Tipo || row.tipo || '').trim()
+              const synonymsRaw = String(row.Sinonimos || row.Sinônimos || row.sinonimos || row.synonyms || '').trim()
+              let type: RubricaType | undefined
+              if (typeRaw) {
+                const t = norm(typeRaw)
+                if (t.includes('provento') || t.includes('vencimento')) type = 'provento'
+                else if (t.includes('desconto')) type = 'desconto'
+                else if (t.includes('base')) type = 'base'
+                else if (t.includes('fgts')) type = 'fgts'
+              }
+              if (!type) {
+                const nd = norm(description)
+                if (nd.includes('fgts')) type = 'fgts'
+                else if (nd.includes('dias normais') || nd.includes('salario base')) type = 'base'
+                else if (nd.includes('inss') || nd.includes('imposto') || nd.includes('vale') || nd.includes('compra') || nd.includes('contribuicao')) type = 'desconto'
+                else type = 'provento'
+              }
+              const synonyms = synonymsRaw
+                ? synonymsRaw.split(/[;,]/).map((s: string) => s.trim()).filter(Boolean)
+                : [description]
+              list.push({ code: code || undefined, description, type, synonyms })
+            }
+          } catch {}
         }
-        if (!type) {
-          const nd = norm(description)
-          if (nd.includes('fgts')) type = 'fgts'
-          else if (nd.includes('dias normais') || nd.includes('salario base')) type = 'base'
-          else if (nd.includes('inss') || nd.includes('imposto') || nd.includes('vale') || nd.includes('compra') || nd.includes('contribuicao')) type = 'desconto'
-          else type = 'provento'
-        }
-        const synonyms = synonymsRaw
-          ? synonymsRaw.split(/[;,]/).map((s: string) => s.trim()).filter(Boolean)
-          : [description]
-        mapped.push({ code: code || undefined, description, type, synonyms })
       }
-      cachedRubricas = [...STATIC_RUBRICAS, ...mapped]
-      return cachedRubricas
     }
+    const dedup = new Map<string, Rubrica>()
+    for (const r of [...STATIC_RUBRICAS, ...list]) {
+      const key = norm(r.description)
+      if (!dedup.has(key)) dedup.set(key, r)
+    }
+    cachedRubricas = Array.from(dedup.values())
+    return cachedRubricas
   } catch {
-    // ignore and fallback to static
+    cachedRubricas = [...STATIC_RUBRICAS]
+    return cachedRubricas
   }
-  cachedRubricas = [...STATIC_RUBRICAS]
-  return cachedRubricas
 }
 
 export async function getRubricaType(input: string): Promise<RubricaType | null> {

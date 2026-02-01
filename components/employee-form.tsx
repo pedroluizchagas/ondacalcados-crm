@@ -1,11 +1,12 @@
 'use client'
 
 import React from "react"
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import type { Employee } from '@/types'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar'
 import {
   Select,
   SelectContent,
@@ -13,8 +14,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Camera } from 'lucide-react'
 import { useStores, usePositions } from '@/hooks/use-data'
+import { createClient } from '@/lib/supabase/client'
+import { useToast } from '@/hooks/use-toast'
 
 interface EmployeeFormProps {
   employee?: Employee
@@ -36,6 +39,9 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
   const [isSubmitting, setIsSubmitting] = useState(false)
   const { stores } = useStores()
   const { positions } = usePositions()
+  const { toast } = useToast()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const supabase = createClient()
   const [formData, setFormData] = useState({
     name: employee?.name || '',
     email: employee?.email || '',
@@ -52,9 +58,14 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
     city: employee?.address?.city || '',
     state: employee?.address?.state || '',
     zipCode: employee?.address?.zipCode || '',
+    avatarUrl: (employee as any)?.avatarUrl || (employee as any)?.avatar_url || '',
   })
 
   const [baseSalary, setBaseSalary] = useState<number>(0)
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [avatarPreview, setAvatarPreview] = useState<string | undefined>(
+    (employee as any)?.avatarUrl || (employee as any)?.avatar_url || undefined
+  )
 
   useEffect(() => {
     if (formData.positionId) {
@@ -68,6 +79,44 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
 
   const handleChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }))
+  }
+
+  const getInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .toUpperCase()
+      .slice(0, 2)
+  }
+
+  const handleAvatarClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleAvatarChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    if (!file.type.startsWith('image/')) {
+      toast({
+        title: 'Arquivo invalido',
+        description: 'Selecione uma imagem valida.',
+        variant: 'destructive',
+      })
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      toast({
+        title: 'Arquivo muito grande',
+        description: 'A imagem deve ter no maximo 2MB.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setAvatarFile(file)
+    const preview = URL.createObjectURL(file)
+    setAvatarPreview(preview)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -96,6 +145,40 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
       },
     }
 
+    if (avatarFile) {
+      try {
+        const fileExt = avatarFile.name.split('.').pop()
+        const safeName = formData.name.replace(/[^a-zA-Z0-9_-]/g, '').toLowerCase() || 'funcionario'
+        const fileName = `${safeName}-${Date.now()}.${fileExt}`
+        const filePath = `employees/${fileName}`
+        const { error: uploadError } = await supabase.storage
+          .from('funcionarios_avatar')
+          .upload(filePath, avatarFile, { upsert: true })
+        if (uploadError) {
+          const reader = new FileReader()
+          await new Promise<void>((resolve, reject) => {
+            reader.onloadend = () => resolve()
+            reader.onerror = () => reject(new Error('Falha ao ler arquivo'))
+            reader.readAsDataURL(avatarFile)
+          })
+          const base64 = reader.result as string
+          ;(employeeData as any).avatarUrl = base64
+        } else {
+          const { data: pub } = supabase.storage.from('funcionarios_avatar').getPublicUrl(filePath)
+          ;(employeeData as any).avatarUrl = pub.publicUrl
+        }
+      } catch (err) {
+        console.error('Erro ao enviar avatar do funcionario:', err)
+        toast({
+          title: 'Erro no avatar',
+          description: 'Nao foi possivel enviar a imagem. Continuando sem avatar.',
+          variant: 'destructive',
+        })
+      }
+    } else if (formData.avatarUrl) {
+      ;(employeeData as any).avatarUrl = formData.avatarUrl
+    }
+
     onSubmit(employeeData)
     setIsSubmitting(false)
   }
@@ -109,6 +192,36 @@ export function EmployeeForm({ employee, onSubmit, onCancel }: EmployeeFormProps
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
+      {/* Avatar */}
+      <div className="space-y-3">
+        <h3 className="text-sm font-medium text-muted-foreground">Avatar</h3>
+        <div className="flex items-center gap-4">
+          <div className="relative cursor-pointer group" onClick={handleAvatarClick}>
+            <Avatar className="h-16 w-16">
+              <AvatarImage src={avatarPreview} alt={formData.name || 'Avatar'} />
+              <AvatarFallback className="bg-primary text-primary-foreground">
+                {getInitials(formData.name || 'F')}
+              </AvatarFallback>
+            </Avatar>
+            <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+              <Camera className="h-6 w-6 text-white" />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <p className="text-sm">Clique no avatar para selecionar uma foto</p>
+            <p className="text-xs text-muted-foreground">Formatos: JPG, PNG, GIF. Tamanho maximo: 2MB</p>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={handleAvatarChange}
+            disabled={isSubmitting}
+          />
+        </div>
+      </div>
+
       {/* Personal Info */}
       <div className="space-y-4">
         <h3 className="text-sm font-medium text-muted-foreground">Dados Pessoais</h3>
