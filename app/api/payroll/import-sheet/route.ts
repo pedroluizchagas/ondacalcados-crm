@@ -41,7 +41,7 @@ function keyForHeader(h: string): string {
   const n = normalizeText(h)
   if (/\bcpf\b/.test(n)) return 'cpf'
   if (/\bnome\b|\bfuncionari[oa]\b|\bcolaborador\b|\bempregad[oa]\b/.test(n)) return 'name'
-  if (/\bsal(?:a|á)rio\s*base\b|\bdias\s*normais\b|\bbase\b/.test(n)) return 'baseSalary'
+  if (/\bsal(?:a|á)rio\s*base\b|\bbase\b/.test(n)) return 'baseSalary'
   if (/\bcomiss|vendas|premio|bonifica|produtivid|premia/.test(n)) return 'commissions'
   if (/\bcompras?\b|mercador|consumo|convenio/.test(n)) return 'employeePurchases'
   if (/\birrf\b|imposto\s+de\s+renda|imp\s*ren/.test(n)) return 'vouchers'
@@ -220,7 +220,7 @@ export async function POST(request: Request) {
       const fgts = row.fgts || (item ? Number(item.fgts || 0) : 0)
       const eventProventos = (row.events || []).filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
       const eventDescontos = (row.events || []).filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
-      let grossSalary = baseSalary + commissions + eventProventos
+      let grossSalary = commissions + eventProventos
       let totalDeductions = employeePurchases + vouchers + advances + inss + eventDescontos
       let netSalary = grossSalary - totalDeductions
       if (typeof row.pdfGross === 'number' && typeof row.pdfDiscounts === 'number' && row.pdfGross > 0 && row.pdfDiscounts > 0) {

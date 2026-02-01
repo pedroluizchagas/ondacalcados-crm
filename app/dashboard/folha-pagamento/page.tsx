@@ -270,7 +270,7 @@ export default function FolhaPagamentoPage() {
     }).format(value)
   }
 
-  // Calculo: (Salario Base + Comissao + Proventos) - (Compras + Vales + Adiantamento + INSS + Descontos). FGTS e mostrado mas nao subtraido
+  // Calculo: (Comissao + Proventos) - (Compras + Vales + Adiantamento + INSS + Descontos). FGTS e mostrado mas nao subtraido
   const calculatePayroll = (baseSalary: number, form: typeof editForm, events: PayrollEvent[] = []) => {
     const commissions = parseFloat(form.commissions) || 0
     const employeePurchases = parseFloat(form.employeePurchases) || 0
@@ -283,7 +283,7 @@ export default function FolhaPagamentoPage() {
     const eventProventos = events.filter(e => e.type === 'provento').reduce((sum, e) => sum + e.value, 0)
     const eventDescontos = events.filter(e => e.type === 'desconto').reduce((sum, e) => sum + e.value, 0)
 
-    const grossSalary = baseSalary + commissions + eventProventos
+    const grossSalary = commissions + eventProventos
     const totalDeductions = employeePurchases + vouchers + advances + inss + eventDescontos
     const netSalary = grossSalary - totalDeductions
 
@@ -451,7 +451,6 @@ export default function FolhaPagamentoPage() {
     const monthLabel = getMonthName(selectedPayroll.month)
     const paymentTypeLabel = paymentTypeMap[selectedPayroll.paymentType]
     const proventos = [
-      { label: 'Salario Base', value: selectedPayroll.baseSalary },
       ...(selectedPayroll.commissions > 0 ? [{ label: 'Comissoes', value: selectedPayroll.commissions }] : []),
       ...((selectedPayroll.customEvents || []).filter(e => e.type === 'provento').map(e => ({ label: e.description, value: e.value }))),
     ]
@@ -629,7 +628,7 @@ const handleCreatePayroll = async () => {
     const employee = activeEmployees.find(e => e.id === newForm.employeeId)
     if (!employee) return
     
-    const baseSalary = getBaseSalary((employee as any).positionId || (employee as any).position_id)
+    const baseSalary = 0
     const calculations = calculatePayroll(baseSalary, newForm, newPayrollEvents)
     
     const newPayroll: ExtendedPayrollItem = {
@@ -1058,10 +1057,6 @@ const handleCreatePayroll = async () => {
                     <ArrowUpCircle className="h-4 w-4 text-green-600" />
                     <span className="text-green-600">Proventos</span>
                   </h4>
-                  <div className="flex justify-between text-sm">
-                    <span>Salario Base</span>
-                    <span>{formatCurrency(selectedPayroll.baseSalary)}</span>
-                  </div>
                   {selectedPayroll.commissions > 0 && (
                     <div className="flex justify-between text-sm">
                       <span>Comissoes</span>
@@ -1160,11 +1155,6 @@ const handleCreatePayroll = async () => {
           </DialogHeader>
           {selectedPayroll && (
             <div className="space-y-5">
-              <div className="rounded-lg border p-4 bg-muted/40">
-                <p className="text-sm text-muted-foreground">Salario Base</p>
-                <p className="text-lg font-semibold">{formatCurrency(selectedPayroll.baseSalary)}</p>
-              </div>
-
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="rounded-lg border p-4 space-y-3">
                   <h4 className="font-semibold text-sm flex items-center gap-2">
@@ -1751,7 +1741,7 @@ const handleCreatePayroll = async () => {
                   <p className="text-2xl font-bold text-primary">
                     {formatCurrency(
                       calculatePayroll(
-                        getBaseSalary(((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.positionId || ((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.position_id || ''),
+                        0,
                         newForm,
                         newPayrollEvents
                       ).netSalary

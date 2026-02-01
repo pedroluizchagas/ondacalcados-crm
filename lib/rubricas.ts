@@ -17,7 +17,7 @@ function norm(s: string) {
 }
 
 const STATIC_RUBRICAS: Rubrica[] = [
-  { code: '8781', description: 'Dias Normais', type: 'base', synonyms: ['salario base', 'dias normais', 'base salarial'] },
+  { code: '8781', description: 'Dias Normais', type: 'provento', synonyms: ['salario base', 'dias normais', 'base salarial'] },
   { code: '250', description: 'Reflexo Extras DSR', type: 'provento', synonyms: ['reflexo extras dsr', 'reflexo dsr'] },
   { code: '1134', description: 'Abono Domingo 50%', type: 'provento', synonyms: ['abono domingo', 'abono 50', 'domingo'] },
   { code: '1138', description: 'Horas Domingo', type: 'provento', synonyms: ['horas domingo', 'hora domingo', 'hora extra domingo'] },
@@ -88,7 +88,8 @@ export async function loadRubricas(): Promise<Rubrica[]> {
               if (!type) {
                 const nd = norm(description)
                 if (nd.includes('fgts')) type = 'fgts'
-                else if (nd.includes('dias normais') || nd.includes('salario base')) type = 'base'
+                else if (nd.includes('salario base')) type = 'base'
+                else if (nd.includes('dias normais')) type = 'provento'
                 else if (nd.includes('inss') || nd.includes('imposto') || nd.includes('vale') || nd.includes('compra') || nd.includes('contribuicao')) type = 'desconto'
                 else type = 'provento'
               }
@@ -127,7 +128,8 @@ export async function getRubricaType(input: string): Promise<RubricaType | null>
     if (n.includes(nr) || nr.includes(n)) return r.type
   }
   // Heuristic fallback
-  if (/\bdias?\s+normais\b|\bsalario\s+base\b/.test(n)) return 'base'
+  if (/\bsalario\s+base\b/.test(n)) return 'base'
+  if (/\bdias?\s+normais\b/.test(n)) return 'provento'
   if (/\bfgts\b|f\.?g\.?t\.?s/.test(n)) return 'fgts'
   if (/inss|previd|irrf|imposto\s+de\s+renda|vale|contribuicao|descont/.test(n)) return 'desconto'
   if (/gratific|hora\s+extra|reflexo|abono|domingo|adicional|premio|diferenca/.test(n)) return 'provento'
@@ -145,7 +147,8 @@ export function getRubricaTypeSync(input: string): RubricaType | null {
     const nr = norm(r.description)
     if (n.includes(nr) || nr.includes(n)) return r.type
   }
-  if (/\bdias?\s+normais\b|\bsalario\s+base\b/.test(n)) return 'base'
+  if (/\bsalario\s+base\b/.test(n)) return 'base'
+  if (/\bdias?\s+normais\b/.test(n)) return 'provento'
   if (/\bfgts\b|f\.?g\.?t\.?s/.test(n)) return 'fgts'
   if (/inss|previd|irrf|imposto\s+de\s+renda|vale|contribuicao|descont/.test(n)) return 'desconto'
   if (/gratific|hora\s+extra|reflexo|abono|domingo|adicional|premio|diferenca/.test(n)) return 'provento'

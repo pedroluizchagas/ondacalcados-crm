@@ -174,14 +174,14 @@ function parseRows(text: string): ParsedRow[] {
   }
   let eventProventos = events.filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
   let eventDescontos = events.filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
-  let grossSalary = base + commissions + eventProventos
+  let grossSalary = commissions + eventProventos
   let totalDeductions = purchases + irrf + advances + inss + eventDescontos
   let netSalary = grossSalary - totalDeductions
   if (totalGrossFromPdf > 0 && totalDiscountsFromPdf > 0) {
     grossSalary = totalGrossFromPdf
     totalDeductions = totalDiscountsFromPdf
     netSalary = netFromPdf > 0 ? netFromPdf : grossSalary - totalDeductions
-    const otherProventos = Math.max(0, grossSalary - (base + commissions + eventProventos))
+    const otherProventos = Math.max(0, grossSalary - (commissions + eventProventos))
     if (otherProventos > 0.009) {
       events.push({ id: `e-${events.length}`, description: 'Outros Rendimentos', type: 'provento', value: otherProventos })
       eventProventos += otherProventos
