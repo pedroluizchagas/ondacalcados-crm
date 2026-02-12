@@ -5,21 +5,12 @@ import { createRequire } from 'module'
 import { createPayrollItemAdmin, updatePayrollItemAdmin } from '@/lib/services/data-service'
 import type { PayrollItem } from '@/types'
 import { loadRubricas, getRubricaTypeSync } from '@/lib/rubricas'
+import { normalizeText, normalizeName, parseMoney, matchEmployee } from '@/lib/pdf-parser'
 
-function normalizeText(s: string) {
-  return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-}
-
-function normalizeName(s: string | undefined) {
-  return normalizeText(String(s || '')).replace(/\s+/g, ' ').trim()
-}
-
-function parseMoney(input: any): number {
-  if (typeof input === 'number') return input
-  const s = String(input || '').replace(/\s/g, '').replace(/\./g, '').replace(',', '.').replace(/[^\d\.-]/g, '')
-  const n = parseFloat(s)
-  return isNaN(n) ? 0 : n
-}
+// ---------------------------------------------------------------------------
+// POST /api/payroll/import-sheet
+// Importa planilha XLSX/XLS/CSV com dados de folha de pagamento.
+// ---------------------------------------------------------------------------
 
 type ParsedRow = {
   name?: string
@@ -41,7 +32,7 @@ function keyForHeader(h: string): string {
   const n = normalizeText(h)
   if (/\bcpf\b/.test(n)) return 'cpf'
   if (/\bnome\b|\bfuncionari[oa]\b|\bcolaborador\b|\bempregad[oa]\b/.test(n)) return 'name'
-  if (/\bsal(?:a|á)rio\s*base\b|\bbase\b/.test(n)) return 'baseSalary'
+  if (/\bsal(?:a|\u00e1)rio\s*base\b|\bbase\b/.test(n)) return 'baseSalary'
   if (/\bcomiss|vendas|premio|bonifica|produtivid|premia/.test(n)) return 'commissions'
   if (/\bcompras?\b|mercador|consumo|convenio/.test(n)) return 'employeePurchases'
   if (/\birrf\b|imposto\s+de\s+renda|imp\s*ren/.test(n)) return 'vouchers'
@@ -51,7 +42,7 @@ function keyForHeader(h: string): string {
   if (/\btotal\s+(de\s+)?(vencimentos|proventos)|\bbruto\b/.test(n)) return 'pdfGross'
   if (/\btotal\s+(de\s+)?descontos?/.test(n)) return 'pdfDiscounts'
   if (/\bliquido\b|valor\s+liquido/.test(n)) return 'pdfNet'
-  if (/\bmes\b|m[eê]s|compet[eê]ncia/.test(n)) return 'month'
+  if (/\bmes\b|m[e\u00ea]s|compet[e\u00ea]ncia/.test(n)) return 'month'
   if (/\bano\b/.test(n)) return 'year'
   return ''
 }
@@ -81,7 +72,7 @@ function parseSheetRows(XLSX: any, wb: any): { rows: ParsedRow[]; month?: number
           values.baseSalary = (parseMoney(values.baseSalary) || 0) > 0 ? values.baseSalary : num
           continue
         }
-        if (typeByRubrica === 'fgts') {
+        if (typeByRubrica === 'fgts' || typeByRubrica === 'informativa') {
           values.fgts = (parseMoney(values.fgts) || 0) + num
           continue
         }
@@ -166,43 +157,31 @@ export async function POST(request: Request) {
     if (rows.length === 0) {
       return NextResponse.json({ error: 'Planilha sem dados reconhecidos' }, { status: 422 })
     }
+
+    // Buscar funcionarios
     const { data: employeesData } = await supabase.from('employees').select('*')
     const employees = employeesData || []
     const cpfMap = new Map<string, any>()
     for (const e of employees) {
-      if ((e as any).cpf) {
-        const k = String((e as any).cpf).replace(/[^\d]/g, '')
-        cpfMap.set(k, e)
-      }
+      if ((e as any).cpf) cpfMap.set(String((e as any).cpf).replace(/[^\d]/g, ''), e)
     }
+
     const results: Array<{ employeeId: string; name: string; action: 'created' | 'updated'; netSalary: number }> = []
     const unmatched: Array<{ name?: string; cpf?: string }> = []
     const divergences: Array<{ employeeId?: string; name?: string; calcNet: number; pdfNet: number; diff: number }> = []
+
     for (const row of rows) {
-      let employee: any = null
-      if (row.cpf) {
-        const key = String(row.cpf).replace(/[^\d]/g, '')
-        employee = cpfMap.get(key) || null
-      }
-      if (!employee && row.name) {
-        const n = normalizeName(row.name)
-        const exact = employees.filter(e => normalizeName(e.name || '') === n)
-        if (exact.length === 1) {
-          employee = exact[0]
-        } else if (exact.length > 1) {
-          employee = null
-        } else {
-          const partial = employees.filter(e => {
-            const en = normalizeName(e.name || '')
-            return en.includes(n) || n.includes(en)
-          })
-          employee = partial.length === 1 ? partial[0] : null
-        }
-      }
+      const employee = matchEmployee(
+        { name: row.name, cpf: row.cpf },
+        employees,
+        cpfMap,
+      )
+
       if (!employee) {
         unmatched.push({ name: row.name, cpf: row.cpf })
         continue
       }
+
       const { data: existing } = await supabase
         .from('payroll_items')
         .select('*')
@@ -260,7 +239,7 @@ export async function POST(request: Request) {
         results.push({ employeeId: created.employeeId || employee.id, name: created.employeeName || employee.name, action: 'created', netSalary: created.netSalary || netSalary })
       }
     }
-    const summary = {
+    return NextResponse.json({
       total: results.length,
       created: results.filter(r => r.action === 'created').length,
       updated: results.filter(r => r.action === 'updated').length,
@@ -272,15 +251,11 @@ export async function POST(request: Request) {
       divergences: divergences.slice(0, 10),
       month,
       year,
-    }
-    return NextResponse.json(summary, { status: 200 })
+    }, { status: 200 })
   } catch (error) {
-    return NextResponse.json(
-      { 
-        error: 'Falha ao importar planilha',
-        details: error instanceof Error ? error.message : String(error)
-      }, 
-      { status: 500 }
-    )
+    return NextResponse.json({
+      error: 'Falha ao importar planilha',
+      details: error instanceof Error ? error.message : String(error),
+    }, { status: 500 })
   }
 }

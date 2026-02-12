@@ -1,231 +1,17 @@
 import { NextResponse } from 'next/server'
 export const runtime = 'nodejs'
 import { createClient } from '@/lib/supabase/server'
-import { loadRubricas, getRubricaTypeSync } from '@/lib/rubricas'
-import { createRequire } from 'module'
+import {
+  parsePdfBuffer,
+  matchEmployee,
+  normalizeName,
+  type ParsedPayslip,
+} from '@/lib/pdf-parser'
 
-function normalizeText(s: string) {
-  return s.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-}
-
-function normalizeName(s: string | undefined) {
-  return normalizeText(String(s || '')).replace(/\s+/g, ' ').trim()
-}
-
-function splitIntoReceipts(text: string): string[] {
-  const blocks: string[] = []
-  const patterns = [
-    /Recibo\s+de\s+Pagamento\s+de\s+Sal(?:á|a)rio/gi,
-    /Recibo\s+de\s+Pagamento\s+de\s+Folha\s+Mensal/gi,
-    /Holerite/gi,
-    /Onda\s+Cal(?:ç|c)ados/gi,
-  ]
-  for (const rx of patterns) {
-    const matches = Array.from(text.matchAll(rx))
-    if (matches.length > 1) {
-      const indices = matches.map(m => (m.index ?? 0))
-      for (let i = 0; i < indices.length; i++) {
-        const start = indices[i]
-        const end = i + 1 < indices.length ? indices[i + 1] : text.length
-        blocks.push(text.slice(start, end).trim())
-      }
-      return blocks.filter(b => b.length > 0)
-    }
-  }
-  const byPages = text.split(/\n{2,}/).map(b => b.trim()).filter(Boolean)
-  return byPages.length > 0 ? byPages : [text]
-}
-
-function filterEmployerReceipts(receipts: string[]): string[] {
-  const out: string[] = []
-  for (const b of receipts) {
-    const n = normalizeText(b)
-    const hasEmpregador = /\bvia\b.*\bempregador\b/.test(n)
-    const hasEmpregado = /\bvia\b.*\bempregado\b/.test(n)
-    if (hasEmpregado && !hasEmpregador) continue
-    if (hasEmpregador) out.push(b)
-  }
-  if (out.length > 0) return out
-  return receipts
-}
-
-function parseMoney(input: string): number {
-  const s = input.replace(/\s/g, '').replace(/\./g, '').replace(',', '.').replace(/[^\d\.-]/g, '')
-  const n = parseFloat(s)
-  return isNaN(n) ? 0 : n
-}
-
-function detectCompetence(text: string): { month?: number; year?: number } {
-  const months = [
-    { rx: /janeiro/i, value: 1 },
-    { rx: /fevereiro/i, value: 2 },
-    { rx: /marco|mar\u00e7o/i, value: 3 },
-    { rx: /abril/i, value: 4 },
-    { rx: /maio/i, value: 5 },
-    { rx: /junho/i, value: 6 },
-    { rx: /julho/i, value: 7 },
-    { rx: /agosto/i, value: 8 },
-    { rx: /setembro/i, value: 9 },
-    { rx: /outubro/i, value: 10 },
-    { rx: /novembro/i, value: 11 },
-    { rx: /dezembro/i, value: 12 },
-  ]
-  const period = text.match(/(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4}).{0,40}?\b[aA]\b.{0,40}?(\d{1,2})\s*[\/\-]\s*(\d{1,2})\s*[\/\-]\s*(\d{4})/)
-  if (period) {
-    const m2 = parseInt(period[5], 10)
-    const y2 = parseInt(period[6], 10)
-    if (m2 >= 1 && m2 <= 12) return { month: m2, year: y2 }
-  }
-  const mmYYYY = Array.from(text.matchAll(/(\d{1,2})\s*[\/\-]\s*(\d{4})/g)).map(m => ({ month: parseInt(m[1], 10), year: parseInt(m[2], 10) }))
-  for (const { month, year } of mmYYYY) {
-    if (month >= 1 && month <= 12) return { month, year }
-  }
-  for (const mm of months) {
-    const found = text.match(mm.rx)
-    if (found) {
-      const y = text.match(/(20\d{2})/)
-      return { month: mm.value, year: y ? parseInt(y[1], 10) : undefined }
-    }
-  }
-  return {}
-}
-
-type ParsedRow = {
-  name?: string
-  cpf?: string
-  baseSalary?: number
-  commissions?: number
-  employeePurchases?: number
-  vouchers?: number
-  advances?: number
-  inss?: number
-  fgts?: number
-  events?: Array<{ id: string; description: string; type: 'provento' | 'desconto'; value: number }>
-  pdfGross?: number
-  pdfDiscounts?: number
-  pdfNet?: number
-}
-
-function parseRows(text: string): ParsedRow[] {
-  const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-  const joinedText = lines.join(' ')
-  const cpfMatch = joinedText.match(/\b\d{3}\.\d{3}\.\d{3}\-\d{2}\b|\b\d{11}\b/)
-  const nameMatch = joinedText.match(/(?:nome|funcionari[oa]|colaborador|empregad[oa])[:\s]*([A-Za-z\u00C0-\u017F\s]+)/i)
-  let base = 0
-  const baseMatch = joinedText.match(/sal(?:á|a)rio\s*base[^\d]*([\d\.\,]+)/i) || joinedText.match(/dias\s*normais[^\d]*([\d\.\,]+)/i)
-  if (baseMatch) base = parseMoney(baseMatch[1])
-  const fgtsMatch = joinedText.match(/f\.?g\.?t\.?s(?:\s+do\s+periodo)?[^\d]*([\d\.\,]+)/i)
-  const fgts = fgtsMatch ? parseMoney(fgtsMatch[1]) : 0
-  const totalGrossMatch = joinedText.match(/total\s+(?:de\s+)?(?:vencimentos|proventos)[^\d]*([\d\.\,]+)/i)
-  const totalDiscountsMatch = joinedText.match(/total\s+(?:de\s+)?descontos?[^\d]*([\d\.\,]+)/i)
-  const netMatch = joinedText.match(/liquido[^\d]*r?\$?\s*([\d\.\,]+)/i)
-  let totalGrossFromPdf = totalGrossMatch ? parseMoney(totalGrossMatch[1]) : 0
-  let totalDiscountsFromPdf = totalDiscountsMatch ? parseMoney(totalDiscountsMatch[1]) : 0
-  let netFromPdf = netMatch ? parseMoney(netMatch[1]) : 0
-  const moneyRx = /([A-Za-z\u00C0-\u017F][A-Za-z\u00C0-\u017F\s\-\%\/\.]+?)\s+(\d{1,3}(?:\.\d{3})*,\d{2})(?!\S)/g
-  const events: Array<{ id: string; description: string; type: 'provento' | 'desconto'; value: number }> = []
-  let commissions = 0
-  let purchases = 0
-  let irrf = 0
-  let advances = 0
-  let inss = 0
-  for (;;) {
-    const m = moneyRx.exec(joinedText)
-    if (!m) break
-    const desc = m[1].trim()
-    const val = parseMoney(m[2])
-    const nd = normalizeText(desc)
-    if (/total|liquido/.test(nd)) continue
-    if (/recibo\s+de\s+pagamento|via\s+do\s+empregad|via\s+do\s+empregador|x[-\s]?nello|comercio|calcados|gerente|cargo|pagina|data\s+admissao|cnpj|cpf|ctps|serie|referencia|codigo|descricao/.test(nd)) continue
-    const typeByRubrica = getRubricaTypeSync(desc)
-    if (typeByRubrica === 'base') {
-      base = base > 0 ? base : val
-      continue
-    }
-    if (typeByRubrica === 'fgts') {
-      continue
-    }
-    if (/comiss/.test(nd)) {
-      commissions += val
-      continue
-    }
-    if (typeByRubrica === 'desconto' || /imposto(?:\s+de)?\s+renda|\birrf\b/.test(nd)) {
-      irrf += val
-      continue
-    }
-    if (/compras?\s+efetuadas?\s+na\s+empresa|vale\s+mercador|consumo/.test(nd)) {
-      purchases += val
-      continue
-    }
-    if (/vale\s+transporte|vale\s+avulso/.test(nd)) {
-      events.push({ id: `e-${events.length}`, description: desc, type: 'desconto', value: val })
-      continue
-    }
-    if (/adiantamento/.test(nd)) {
-      advances += val
-      continue
-    }
-    if (/\b(?:i\.?n\.?s\.?s\.?|inss)\b|\bprevid/.test(nd)) {
-      inss += val
-      continue
-    }
-    const isDesconto = /descont|contribui|negocial|vale/.test(nd)
-    events.push({ id: `e-${events.length}`, description: desc, type: isDesconto ? 'desconto' : 'provento', value: val })
-  }
-  let eventProventos = events.filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
-  let eventDescontos = events.filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
-  let grossSalary = commissions + eventProventos
-  let totalDeductions = purchases + irrf + advances + inss + eventDescontos
-  let netSalary = grossSalary - totalDeductions
-  if (totalGrossFromPdf > 0 && totalDiscountsFromPdf > 0) {
-    grossSalary = totalGrossFromPdf
-    totalDeductions = totalDiscountsFromPdf
-    netSalary = netFromPdf > 0 ? netFromPdf : grossSalary - totalDeductions
-    const otherProventos = Math.max(0, grossSalary - (commissions + eventProventos))
-    if (otherProventos > 0.009) {
-      events.push({ id: `e-${events.length}`, description: 'Outros Rendimentos', type: 'provento', value: otherProventos })
-      eventProventos += otherProventos
-    }
-    const otherDescontos = Math.max(0, totalDeductions - (purchases + irrf + advances + inss + eventDescontos))
-    if (otherDescontos > 0.009) {
-      events.push({ id: `e-${events.length}`, description: 'Outros Descontos', type: 'desconto', value: otherDescontos })
-      eventDescontos += otherDescontos
-    }
-  }
-  const r: ParsedRow = {
-    name: nameMatch ? nameMatch[1].trim() : undefined,
-    cpf: cpfMatch ? cpfMatch[0] : undefined,
-    baseSalary: base || undefined,
-    commissions: commissions || undefined,
-    employeePurchases: purchases || undefined,
-    vouchers: irrf || undefined,
-    advances: advances || undefined,
-    inss: inss || undefined,
-    fgts: fgts || undefined,
-    events: events.length > 0 ? events : undefined,
-    pdfGross: totalGrossFromPdf || undefined,
-    pdfDiscounts: totalDiscountsFromPdf || undefined,
-    pdfNet: netFromPdf || undefined,
-  }
-  return [r]
-}
-
-function parseReceiptsWithDedup(text: string): ParsedRow[] {
-  const receipts = splitIntoReceipts(text)
-  const employerReceipts = filterEmployerReceipts(receipts)
-  const rows: ParsedRow[] = []
-  const seen = new Set<string>()
-  for (const b of employerReceipts) {
-    const key = normalizeText(b).slice(0, 80)
-    if (seen.has(key)) continue
-    const r = parseRows(b)
-    if (r.length > 0) seen.add(key)
-    rows.push(...r)
-  }
-  if (rows.length > 0) return rows
-  const all = parseRows(text)
-  return all
-}
+// ---------------------------------------------------------------------------
+// POST /api/payroll/import-analyze
+// Analisa PDF e retorna preview dos dados extraidos (sem salvar no banco).
+// ---------------------------------------------------------------------------
 
 export async function POST(request: Request) {
   try {
@@ -241,191 +27,106 @@ export async function POST(request: Request) {
     if (!role || !allowed.has(String(role))) {
       return NextResponse.json({ error: 'Unauthorized: role required (admin/hr/finance)' }, { status: 403 })
     }
+
+    // Aceita multipart/form-data com arquivo PDF
     const contentType = request.headers.get('content-type') || ''
-    let text = ''
-    let competence = { month: undefined as number | undefined, year: undefined as number | undefined }
-    await loadRubricas()
-    const require = createRequire(import.meta.url)
-    if (contentType.includes('multipart/form-data')) {
-      const formData = await request.formData()
-      const file = formData.get('file')
-      if (!(file instanceof File)) {
-        return NextResponse.json({ error: 'Arquivo ausente' }, { status: 400 })
-      }
-      const type = String(file.type || '')
-      if (type.includes('pdf')) {
-        const buf = Buffer.from(await file.arrayBuffer())
-        try {
-          const pdfParseMod = require('pdf-parse')
-          const pdfParse = pdfParseMod?.default || pdfParseMod
-          const parsed = await pdfParse(buf)
-          text = String(parsed?.text || '').trim()
-        } catch {}
-        if (!text.trim()) {
-          try {
-            const mod = require('pdf2json')
-            const PDFCtor = mod?.PDFParser || mod?.default || mod
-            if (PDFCtor) {
-              const result = await new Promise<string>((resolve, reject) => {
-                try {
-                  const parser = new PDFCtor()
-                  parser.on('pdfParser_dataError', (err: any) => reject(err?.parserError || err))
-                  parser.on('pdfParser_dataReady', (data: any) => {
-                    try {
-                      const parts: string[] = []
-                      const pages = Array.isArray(data?.Pages) ? data.Pages : []
-                      for (const p of pages) {
-                        const texts = Array.isArray(p?.Texts) ? p.Texts : []
-                        for (const t of texts) {
-                          const runs = Array.isArray(t?.R) ? t.R : []
-                          for (const r of runs) {
-                            const s = r?.T ? decodeURIComponent(String(r.T).replace(/\+/g, '%20')) : ''
-                            if (s) parts.push(s)
-                          }
-                        }
-                        parts.push('\n')
-                      }
-                      resolve(parts.join(' '))
-                    } catch {
-                      resolve('')
-                    }
-                  })
-                  parser.parseBuffer(buf)
-                } catch (e) {
-                  reject(e)
-                }
-              })
-              if (result) text = result
-            }
-          } catch {}
-        }
-      } else if (type.includes('json')) {
-        const s = await file.text()
-        const obj = JSON.parse(s)
-        const pages: string[] = Array.isArray(obj?.pages) ? obj.pages : []
-        text = pages.join('\n\n')
-      } else {
-        return NextResponse.json({ error: 'Tipo de arquivo invalido' }, { status: 400 })
-      }
-    } else if (contentType.includes('application/json')) {
-      const body = await request.json()
-      const pages: string[] = Array.isArray(body?.pages) ? body.pages : []
-      if (!pages || pages.length === 0) {
-        return NextResponse.json({ error: 'JSON com pages[] ausente' }, { status: 400 })
-      }
-      text = pages.join('\n\n')
-    } else {
-      return NextResponse.json({ error: 'Conteudo invalido' }, { status: 400 })
+    if (!contentType.includes('multipart/form-data')) {
+      return NextResponse.json({ error: 'Content-Type deve ser multipart/form-data' }, { status: 400 })
     }
-    if (!text.trim()) {
-      return NextResponse.json({ error: 'Sem texto legivel para analisar' }, { status: 422 })
+
+    const formData = await request.formData()
+    const file = formData.get('file')
+    if (!(file instanceof File)) {
+      return NextResponse.json({ error: 'Arquivo ausente' }, { status: 400 })
     }
-    {
-      const det = detectCompetence(text)
-      competence = { month: det.month, year: det.year }
+    if (!String(file.type || '').includes('pdf')) {
+      return NextResponse.json({ error: 'Tipo de arquivo invalido. Envie um PDF.' }, { status: 400 })
     }
-    const rows = parseReceiptsWithDedup(text)
+
+    const buf = Buffer.from(await file.arrayBuffer())
+    const result = await parsePdfBuffer(buf)
+
+    if (result.payslips.length === 0) {
+      return NextResponse.json({
+        error: result.rawText
+          ? 'Nao foi possivel extrair dados do PDF (layout nao reconhecido).'
+          : 'PDF sem texto legivel (possivelmente escaneado).',
+      }, { status: 422 })
+    }
+
+    // Buscar funcionarios para vincular
     const { data: employeesData } = await supabase.from('employees').select('*')
     const employees = employeesData || []
     const cpfMap = new Map<string, any>()
     for (const e of employees) {
-      if (e.cpf) {
-        const k = String(e.cpf).replace(/[^\d]/g, '')
-        cpfMap.set(k, e)
-      }
+      if (e.cpf) cpfMap.set(String(e.cpf).replace(/[^\d]/g, ''), e)
     }
+
+    // Montar analise
     const analysis: Array<{
       employeeId?: string
       employeeName?: string
       matched: boolean
       name?: string
       cpf?: string
-      baseSalary?: number
-      commissions?: number
-      employeePurchases?: number
-      vouchers?: number
-      advances?: number
-      inss?: number
-      fgts?: number
+      baseSalary: number
+      commissions: number
+      employeePurchases: number
+      vouchers: number
+      advances: number
+      inss: number
+      fgts: number
       grossSalary: number
       totalDeductions: number
-      calcNet: number
-      pdfNet?: number
-      divergence?: number
-      events?: Array<{ description: string; type: 'provento' | 'desconto'; value: number }>
+      netSalary: number
+      events?: Array<{ code?: string; description: string; type: 'provento' | 'desconto'; value: number }>
     }> = []
-    for (const row of rows) {
-      let employee: any = null
-      if (row.cpf) {
-        const key = row.cpf.replace(/[^\d]/g, '')
-        employee = cpfMap.get(key) || null
-      }
-      if (!employee && row.name) {
-        const n = normalizeName(row.name)
-        employee =
-          employees.find(e => normalizeName(e.name || '') === n) ||
-          employees.find(e => {
-            const en = normalizeName(e.name || '')
-            return en.includes(n) || n.includes(en)
-          }) ||
-          null
-      }
-      const baseSalary = row.baseSalary || 0
-      const commissions = row.commissions || 0
-      const employeePurchases = row.employeePurchases || 0
-      const vouchers = row.vouchers || 0
-      const advances = row.advances || 0
-      const inss = row.inss || 0
-      const fgts = row.fgts || 0
-      const eventProventos = (row.events || []).filter(e => e.type === 'provento').reduce((s, e) => s + e.value, 0)
-      const eventDescontos = (row.events || []).filter(e => e.type === 'desconto').reduce((s, e) => s + e.value, 0)
-      const grossSalary = baseSalary + commissions + eventProventos
-      const totalDeductions = employeePurchases + vouchers + advances + inss + eventDescontos
-      const calcNet = grossSalary - totalDeductions
-      const pdfNet = typeof row.pdfNet === 'number' ? row.pdfNet : undefined
-      const divergence = pdfNet !== undefined ? Number((calcNet - pdfNet).toFixed(2)) : undefined
+
+    for (const ps of result.payslips) {
+      const employee = matchEmployee(ps, employees, cpfMap)
+
       analysis.push({
         employeeId: employee?.id,
         employeeName: employee?.name,
         matched: !!employee,
-        name: row.name,
-        cpf: row.cpf,
-        baseSalary,
-        commissions,
-        employeePurchases,
-        vouchers,
-        advances,
-        inss,
-        fgts,
-        grossSalary,
-        totalDeductions,
-        calcNet,
-        pdfNet,
-        divergence,
-        events: row.events?.map(e => ({ description: e.description, type: e.type, value: e.value })),
+        name: ps.name,
+        cpf: ps.cpf,
+        baseSalary: ps.baseSalary,
+        commissions: ps.commissions,
+        employeePurchases: ps.employeePurchases,
+        vouchers: ps.vouchers,
+        advances: ps.advances,
+        inss: ps.inss,
+        fgts: ps.fgts,
+        grossSalary: ps.totalGross,
+        totalDeductions: ps.totalDeductions,
+        netSalary: ps.netSalary,
+        events: ps.events.map(e => ({
+          code: e.code,
+          description: e.description,
+          type: e.type,
+          value: e.value,
+        })),
       })
     }
+
     const unmatched = analysis.filter(a => !a.matched).map(a => ({ name: a.name, cpf: a.cpf }))
-    const divergences = analysis.filter(a => typeof a.divergence === 'number' && Math.abs(a.divergence || 0) > 1)
-      .map(a => ({ employeeId: a.employeeId, name: a.employeeName || a.name, calcNet: a.calcNet, pdfNet: a.pdfNet!, diff: Number((a.calcNet - (a.pdfNet || 0)).toFixed(2)) }))
-    const summary = {
+
+    return NextResponse.json({
       totalRows: analysis.length,
+      matchedCount: analysis.filter(a => a.matched).length,
       unmatchedCount: unmatched.length,
-      divergencesCount: divergences.length,
-      month: competence.month,
-      year: competence.year,
+      month: result.competence.month,
+      year: result.competence.year,
+      totalPages: result.totalPages,
+      employerPagesCount: result.employerPagesCount,
       unmatched: unmatched.slice(0, 50),
-      divergences: divergences.slice(0, 50),
       items: analysis.slice(0, 500),
-    }
-    return NextResponse.json(summary, { status: 200 })
+    }, { status: 200 })
   } catch (error) {
-    return NextResponse.json(
-      {
-        error: 'Falha ao analisar arquivo',
-        details: error instanceof Error ? error.message : String(error)
-      },
-      { status: 500 }
-    )
+    return NextResponse.json({
+      error: 'Falha ao analisar arquivo',
+      details: error instanceof Error ? error.message : String(error),
+    }, { status: 500 })
   }
 }

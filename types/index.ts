@@ -128,6 +128,7 @@ export interface Resignation {
 
 export interface PayrollEvent {
   id: string
+  code?: string
   description: string
   type: 'provento' | 'desconto'
   value: number

@@ -107,6 +107,13 @@ export default function FolhaPagamentoPage() {
   const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
   const fileSheetInputRef = useRef<HTMLInputElement>(null)
   const [isImportingSheet, setIsImportingSheet] = useState(false)
+  const filePdfInputRef = useRef<HTMLInputElement>(null)
+  const [isAnalyzingPdf, setIsAnalyzingPdf] = useState(false)
+  const [isImportingPdf, setIsImportingPdf] = useState(false)
+  const [pdfPreview, setPdfPreview] = useState<any | null>(null)
+  const [isPdfPreviewOpen, setIsPdfPreviewOpen] = useState(false)
+  const [pdfFile, setPdfFile] = useState<File | null>(null)
+  const [pdfExpandedRows, setPdfExpandedRows] = useState<Set<number>>(new Set())
   const { toast } = useToast()
 
   useEffect(() => {
@@ -160,6 +167,83 @@ export default function FolhaPagamentoPage() {
     }
   }
 
+  // -- PDF Import: Analisar (preview) --
+  const handlePdfAnalyze = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    setPdfFile(file)
+    setIsAnalyzingPdf(true)
+    setPdfExpandedRows(new Set())
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch('/api/payroll/import-analyze', { method: 'POST', body: form })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || 'Falha ao analisar PDF')
+      }
+      const data = await res.json()
+      setPdfPreview(data)
+      setIsPdfPreviewOpen(true)
+    } catch (e: any) {
+      toast({
+        title: 'Erro ao analisar PDF',
+        description: e?.message || 'Verifique o arquivo e tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsAnalyzingPdf(false)
+      if (filePdfInputRef.current) filePdfInputRef.current.value = ''
+    }
+  }
+
+  // -- PDF Import: Confirmar importacao --
+  const handlePdfConfirmImport = async () => {
+    if (!pdfFile) return
+    setIsImportingPdf(true)
+    try {
+      const form = new FormData()
+      form.append('file', pdfFile)
+      if (monthFilter !== 'all') form.append('month', monthFilter)
+      if (yearFilter !== 'all') form.append('year', yearFilter)
+      const res = await fetch('/api/payroll/import-pdf', { method: 'POST', body: form })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err?.error || 'Falha ao importar PDF')
+      }
+      const data = await res.json()
+      if (data?.month && data?.year) {
+        setMonthFilter(String(data.month))
+        setYearFilter(String(data.year))
+      }
+      await mutatePayrolls()
+      setIsPdfPreviewOpen(false)
+      setPdfPreview(null)
+      setPdfFile(null)
+      toast({
+        title: 'Importacao PDF concluida',
+        description: `Atualizados: ${data.updated}, Criados: ${data.created}, Total: ${data.total} (${data.month}/${data.year}).${data.unmatchedCount ? ` Nao vinculados: ${data.unmatchedCount}` : ''}${data.divergencesCount ? ` | Divergencias: ${data.divergencesCount}` : ''}`,
+      })
+    } catch (e: any) {
+      toast({
+        title: 'Erro ao importar PDF',
+        description: e?.message || 'Verifique o arquivo e tente novamente.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsImportingPdf(false)
+    }
+  }
+
+  const togglePdfRow = (idx: number) => {
+    setPdfExpandedRows(prev => {
+      const next = new Set(prev)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
+      return next
+    })
+  }
+
   const getPositionName = (positionId: string) => {
     const p = positions.find(pp => pp.id === positionId || (pp as any).id === positionId)
     return p?.name || 'N/A'
@@ -200,6 +284,7 @@ export default function FolhaPagamentoPage() {
     employeeId: '',
     month: new Date().getMonth() + 1,
     year: new Date().getFullYear(),
+    baseSalary: '',
     commissions: '',
     employeePurchases: '',
     vouchers: '',
@@ -628,7 +713,7 @@ const handleCreatePayroll = async () => {
     const employee = activeEmployees.find(e => e.id === newForm.employeeId)
     if (!employee) return
     
-    const baseSalary = 0
+    const baseSalary = parseFloat(newForm.baseSalary) || 0
     const calculations = calculatePayroll(baseSalary, newForm, newPayrollEvents)
     
     const newPayroll: ExtendedPayrollItem = {
@@ -654,6 +739,7 @@ const handleCreatePayroll = async () => {
       employeeId: '',
       month: new Date().getMonth() + 1,
       year: new Date().getFullYear(),
+      baseSalary: '',
       commissions: '',
       employeePurchases: '',
       vouchers: '',
@@ -693,6 +779,17 @@ const handleCreatePayroll = async () => {
             {isImportingSheet ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
             Importar XLSX/CSV
           </Button>
+          <input
+            type="file"
+            accept=".pdf"
+            ref={filePdfInputRef}
+            onChange={handlePdfAnalyze}
+            className="hidden"
+          />
+          <Button variant="outline" onClick={() => filePdfInputRef.current?.click()} disabled={isAnalyzingPdf}>
+            {isAnalyzingPdf ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileText className="mr-2 h-4 w-4" />}
+            Importar PDF
+          </Button>
           <Button variant="outline" onClick={handlePrintReport}>
             <Printer className="mr-2 h-4 w-4" />
             Imprimir Relatorio
@@ -705,13 +802,20 @@ const handleCreatePayroll = async () => {
       </div>
 
       <Card className="bg-muted/50">
-        <CardContent className="p-4">
+        <CardContent className="p-4 space-y-3">
           <div className="flex items-start gap-3">
-            <FileText className="h-5 w-5 text-muted-foreground mt-0.5" />
+            <FileText className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
+            <div className="text-sm">
+              <p className="font-medium">Importacao via PDF (recomendado):</p>
+              <p className="text-muted-foreground">Envie o PDF da folha de pagamento da contabilidade. O sistema extrai automaticamente os dados de cada funcionario, filtra apenas a via do empregador, identifica todas as rubricas (2.600+) e apresenta um preview antes de confirmar a importacao.</p>
+            </div>
+          </div>
+          <Separator />
+          <div className="flex items-start gap-3">
+            <Upload className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
             <div className="text-sm">
               <p className="font-medium">Importacao via XLSX/XLS/CSV:</p>
-              <p className="text-muted-foreground">A planilha deve conter pelo menos a coluna Nome. Colunas como Base, Comissoes, Compras, IRRF, INSS, FGTS, Bruto, Descontos e Liquido sao aceitas. Rubricas adicionais sao aceitas como colunas e classificadas automaticamente.</p>
-              <p className="text-muted-foreground">CPF (se existir) e opcional; o vinculo e feito por Nome normalizado.</p>
+              <p className="text-muted-foreground">A planilha deve conter pelo menos a coluna Nome. Colunas como Base, Comissoes, Compras, IRRF, INSS, FGTS, Bruto, Descontos e Liquido sao aceitas.</p>
             </div>
           </div>
         </CardContent>
@@ -1456,16 +1560,16 @@ const handleCreatePayroll = async () => {
                   </Popover>
                 </div>
 
-                {newForm.employeeId && (
-                  <div className="rounded-md border bg-muted/40 p-3 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Salario Base</span>
-                      <span className="font-semibold">
-                        {formatCurrency(getBaseSalary(((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.positionId || ((activeEmployees || []).find(e => e.id === newForm.employeeId) as any)?.position_id || ''))}
-                      </span>
-                    </div>
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label>Salario Base (R$)</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="0,00"
+                    value={newForm.baseSalary}
+                    onChange={(e) => setNewForm({ ...newForm, baseSalary: e.target.value })}
+                  />
+                </div>
 
                 <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
                   <div className="space-y-2">
@@ -1741,7 +1845,7 @@ const handleCreatePayroll = async () => {
                   <p className="text-2xl font-bold text-primary">
                     {formatCurrency(
                       calculatePayroll(
-                        0,
+                        parseFloat(newForm.baseSalary) || 0,
                         newForm,
                         newPayrollEvents
                       ).netSalary
@@ -1771,6 +1875,181 @@ const handleCreatePayroll = async () => {
                 </>
               ) : (
                 'Criar Folha'
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog: Preview de importacao PDF */}
+      <Dialog open={isPdfPreviewOpen} onOpenChange={(open) => { if (!open) { setIsPdfPreviewOpen(false); setPdfPreview(null); setPdfFile(null); setPdfExpandedRows(new Set()) } }}>
+        <DialogContent className="max-w-[95vw] w-full xl:max-w-7xl max-h-[92vh] flex flex-col">
+          <DialogHeader className="shrink-0">
+            <DialogTitle>Preview da Importacao - Folha de Pagamento (PDF)</DialogTitle>
+            <DialogDescription>
+              Revise os dados extraidos de cada funcionario antes de confirmar.
+            </DialogDescription>
+          </DialogHeader>
+
+          {pdfPreview && (
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+              {/* Resumo compacto */}
+              <div className="flex flex-wrap items-center gap-4 p-3 bg-muted/50 rounded-lg text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Encontrados:</span>
+                  <span className="font-bold">{pdfPreview.totalRows}</span>
+                </div>
+                <Separator orientation="vertical" className="h-5" />
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Vinculados:</span>
+                  <span className="font-bold text-green-600">{pdfPreview.matchedCount}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Nao vinculados:</span>
+                  <span className="font-bold text-red-600">{pdfPreview.unmatchedCount}</span>
+                </div>
+                <Separator orientation="vertical" className="h-5" />
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Competencia:</span>
+                  <span className="font-bold">{pdfPreview.month ? `${String(pdfPreview.month).padStart(2, '0')}/${pdfPreview.year}` : 'N/A'}</span>
+                </div>
+                {pdfPreview.totalPages > 0 && (
+                  <>
+                    <Separator orientation="vertical" className="h-5" />
+                    <span className="text-xs text-muted-foreground">{pdfPreview.totalPages} pag. no PDF, {pdfPreview.employerPagesCount} recibos do empregador</span>
+                  </>
+                )}
+              </div>
+
+              {/* Nao vinculados */}
+              {pdfPreview.unmatchedCount > 0 && (
+                <div className="p-3 rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-800">
+                  <p className="text-sm font-medium text-red-700 dark:text-red-400 mb-2">Funcionarios nao encontrados no sistema (nao serao importados):</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {pdfPreview.unmatched?.map((u: any, i: number) => (
+                      <Badge key={i} variant="outline" className="text-xs border-red-300 text-red-700 dark:text-red-400">{u?.name || u?.cpf || 'Desconhecido'}</Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Tabela de funcionarios */}
+              <div className="border rounded-lg">
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/30">
+                        <TableHead className="w-8 px-2"></TableHead>
+                        <TableHead className="min-w-[180px]">Funcionario</TableHead>
+                        <TableHead className="text-right min-w-[100px]">Base</TableHead>
+                        <TableHead className="text-right min-w-[110px]">Vencimentos</TableHead>
+                        <TableHead className="text-right min-w-[100px]">Descontos</TableHead>
+                        <TableHead className="text-right min-w-[100px]">Liquido</TableHead>
+                        <TableHead className="text-center min-w-[90px]">Vinculo</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pdfPreview.items?.map((item: any, idx: number) => (
+                        <React.Fragment key={idx}>
+                          <TableRow
+                            className={`cursor-pointer transition-colors hover:bg-muted/50 ${!item.matched ? 'bg-red-50/50 dark:bg-red-950/10' : ''}`}
+                            onClick={() => togglePdfRow(idx)}
+                          >
+                            <TableCell className="w-8 px-2 text-center">
+                              <span className="text-xs text-muted-foreground">{pdfExpandedRows.has(idx) ? '\u25BC' : '\u25B6'}</span>
+                            </TableCell>
+                            <TableCell>
+                              <p className="font-medium text-sm">{item.matched ? item.employeeName : (item.name || 'N/A')}</p>
+                              {item.cpf && <p className="text-xs text-muted-foreground">{item.cpf}</p>}
+                            </TableCell>
+                            <TableCell className="text-right text-sm tabular-nums">{formatCurrency(item.baseSalary || 0)}</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums font-medium text-green-700 dark:text-green-400">{formatCurrency(item.grossSalary || 0)}</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums font-medium text-red-700 dark:text-red-400">{formatCurrency(item.totalDeductions || 0)}</TableCell>
+                            <TableCell className="text-right text-sm tabular-nums font-bold">{formatCurrency(item.netSalary || 0)}</TableCell>
+                            <TableCell className="text-center">
+                              {item.matched
+                                ? <Badge variant="default" className="text-xs">OK</Badge>
+                                : <Badge variant="destructive" className="text-xs">N/A</Badge>
+                              }
+                            </TableCell>
+                          </TableRow>
+
+                          {/* Detalhes expandidos */}
+                          {pdfExpandedRows.has(idx) && (
+                            <TableRow>
+                              <TableCell colSpan={7} className="bg-muted/20 p-0">
+                                <div className="px-4 py-3 space-y-3">
+                                  {/* Campos especificos */}
+                                  <div className="grid grid-cols-3 md:grid-cols-6 gap-x-4 gap-y-1 text-xs">
+                                    <div className="flex justify-between"><span className="text-muted-foreground">INSS:</span> <span className="font-mono font-medium">{formatCurrency(item.inss || 0)}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">IRRF:</span> <span className="font-mono font-medium">{formatCurrency(item.vouchers || 0)}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">FGTS:</span> <span className="font-mono font-medium">{formatCurrency(item.fgts || 0)}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Compras:</span> <span className="font-mono font-medium">{formatCurrency(item.employeePurchases || 0)}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Adiantamento:</span> <span className="font-mono font-medium">{formatCurrency(item.advances || 0)}</span></div>
+                                    <div className="flex justify-between"><span className="text-muted-foreground">Comissoes:</span> <span className="font-mono font-medium">{formatCurrency(item.commissions || 0)}</span></div>
+                                  </div>
+
+                                  {/* Rubricas detalhadas */}
+                                  {item.events && item.events.length > 0 && (
+                                    <>
+                                      <Separator />
+                                      <p className="text-xs font-medium text-muted-foreground">Rubricas extraidas ({item.events.length}):</p>
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        {/* Vencimentos */}
+                                        {item.events.some((e: any) => e.type === 'provento') && (
+                                          <div className="space-y-0.5">
+                                            <p className="text-xs font-semibold text-green-700 dark:text-green-400">Vencimentos</p>
+                                            {item.events.filter((e: any) => e.type === 'provento').map((e: any, ei: number) => (
+                                              <div key={ei} className="flex justify-between text-xs py-0.5">
+                                                <span className="text-muted-foreground truncate mr-2">{e.code ? `[${e.code}] ` : ''}{e.description}</span>
+                                                <span className="font-mono text-green-700 dark:text-green-400 whitespace-nowrap">{formatCurrency(e.value)}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                        {/* Descontos */}
+                                        {item.events.some((e: any) => e.type === 'desconto') && (
+                                          <div className="space-y-0.5">
+                                            <p className="text-xs font-semibold text-red-700 dark:text-red-400">Descontos</p>
+                                            {item.events.filter((e: any) => e.type === 'desconto').map((e: any, ei: number) => (
+                                              <div key={ei} className="flex justify-between text-xs py-0.5">
+                                                <span className="text-muted-foreground truncate mr-2">{e.code ? `[${e.code}] ` : ''}{e.description}</span>
+                                                <span className="font-mono text-red-700 dark:text-red-400 whitespace-nowrap">{formatCurrency(e.value)}</span>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </React.Fragment>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="shrink-0 gap-2 pt-4 border-t">
+            <Button variant="outline" onClick={() => { setIsPdfPreviewOpen(false); setPdfPreview(null); setPdfFile(null); setPdfExpandedRows(new Set()) }}>
+              Cancelar
+            </Button>
+            <Button
+              onClick={handlePdfConfirmImport}
+              disabled={isImportingPdf || !pdfPreview || pdfPreview.matchedCount === 0}
+            >
+              {isImportingPdf ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Importando...
+                </>
+              ) : (
+                `Confirmar Importacao (${pdfPreview?.matchedCount || 0} funcionarios)`
               )}
             </Button>
           </DialogFooter>
