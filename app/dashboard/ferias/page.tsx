@@ -1,7 +1,8 @@
 'use client'
 
 import React from 'react'
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useVacations, useEmployees, useStores, createVacation as apiCreateVacation } from '@/hooks/use-data'
 import type { Vacation } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -34,9 +35,12 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Plus, Search, Calendar, Palmtree, CheckCircle, AlertTriangle, AlertCircle, Info, Loader2 } from 'lucide-react'
 import { useToast } from '@/hooks/use-toast'
+import { getVacationRadar } from '@/lib/vacation-radar'
+import { EmployeeProfile } from '@/components/employee-profile'
 
 const statusMap: Record<Vacation['status'], { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
   scheduled: { label: 'Agendada', variant: 'outline' },
@@ -49,6 +53,7 @@ export default function FeriasPage() {
   const { vacations, mutate: mutateVacations } = useVacations()
   const { employees } = useEmployees()
   const { stores } = useStores()
+  const searchParams = useSearchParams()
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [storeFilter, setStoreFilter] = useState<string>('all')
@@ -56,6 +61,14 @@ export default function FeriasPage() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [isEmployeeOpen, setIsEmployeeOpen] = useState(false)
   const { toast } = useToast()
+  const [upcomingDays, setUpcomingDays] = useState<number>(30)
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const [alertsCategory, setAlertsCategory] = useState<'critical' | 'attention' | 'planning'>('attention')
+  const [radarCategory, setRadarCategory] = useState<string>('all')
+  const [radarStoreFilter, setRadarStoreFilter] = useState<string>('all')
+  const [radarSearchTerm, setRadarSearchTerm] = useState('')
+  const [isProfileOpen, setIsProfileOpen] = useState(false)
+  const [selectedEmployee, setSelectedEmployee] = useState<any | null>(null)
 
   const [formData, setFormData] = useState({
     employeeId: '',
@@ -69,34 +82,23 @@ export default function FeriasPage() {
   const activeEmployees = (employees || []).filter((e: any) => (e as any).status !== 'terminated')
 
   const employeesWithAlerts = useMemo(() => {
-    return activeEmployees.map((emp) => {
-      const today = new Date()
-      const hasVacation = (vacations || []).some((v: any) => (((v as any).employeeId || (v as any).employee_id) === emp.id) && (((v as any).status === 'scheduled') || ((v as any).status === 'in-progress') || ((v as any).status === 'completed')))
-      const getVacationDeadline = (hireDate: string): Date => {
-        const hire = new Date(hireDate)
-        let periodStart = new Date(hire)
-        while (periodStart < today) {
-          periodStart.setFullYear(periodStart.getFullYear() + 1)
-        }
-        periodStart.setFullYear(periodStart.getFullYear() - 1)
-        const deadline = new Date(periodStart)
-        deadline.setFullYear(deadline.getFullYear() + 2)
-        return deadline
-      }
-      const alert = (() => {
-        if (hasVacation) return { level: 'ok', daysUntilDeadline: 999 } as any
-        const hd = (emp as any).hireDate || (emp as any).hire_date
-        const deadline = getVacationDeadline(hd)
-        const diffTime = deadline.getTime() - today.getTime()
-        const daysUntilDeadline = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-        if (daysUntilDeadline <= 15) return { level: 'critical', daysUntilDeadline }
-        if (daysUntilDeadline <= 30) return { level: 'attention', daysUntilDeadline }
-        if (daysUntilDeadline <= 60) return { level: 'planning', daysUntilDeadline }
-        return { level: 'ok', daysUntilDeadline }
-      })()
-      return { ...emp, vacationAlert: alert }
-    })
+    return getVacationRadar(activeEmployees as any, vacations as any)
   }, [activeEmployees, vacations])
+
+  const radarEmployees = useMemo(() => {
+    return employeesWithAlerts.filter((e: any) => (e as any).vacationAlert?.level && (e as any).vacationAlert.level !== 'ok')
+  }, [employeesWithAlerts])
+
+  const filteredRadarEmployees = useMemo(() => {
+    return radarEmployees.filter((emp: any) => {
+      const matchesSearch =
+        String(emp.name || '').toLowerCase().includes(radarSearchTerm.toLowerCase()) ||
+        String(emp.cpf || '').includes(radarSearchTerm)
+      const matchesStore = radarStoreFilter === 'all' || String((emp as any).storeId || (emp as any).store_id) === radarStoreFilter
+      const matchesCategory = radarCategory === 'all' || (emp as any).vacationAlert?.level === radarCategory
+      return matchesSearch && matchesStore && matchesCategory
+    })
+  }, [radarEmployees, radarSearchTerm, radarStoreFilter, radarCategory])
 
   const stats = useMemo(() => {
     const scheduled = vacations.filter((v) => v.status === 'scheduled').length
@@ -111,6 +113,23 @@ export default function FeriasPage() {
 
     return { scheduled, inProgress, completed, alertCounts }
   }, [vacations, employeesWithAlerts])
+
+  const upcomingVacations = useMemo(() => {
+    const today = new Date()
+    return (vacations || [])
+      .filter((v: any) => {
+        const start = (v as any).startDate || (v as any).start_date
+        if (!start) return false
+        const startDate = new Date(start)
+        const diff = Math.ceil((startDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+        return diff > 0 && diff <= upcomingDays && (v as any).status === 'scheduled'
+      })
+      .sort((a: any, b: any) => {
+        const as = new Date((a as any).startDate || (a as any).start_date).getTime()
+        const bs = new Date((b as any).startDate || (b as any).start_date).getTime()
+        return as - bs
+      })
+  }, [vacations, upcomingDays])
 
   const filteredVacations = useMemo(() => {
     return vacations.filter((vacation: any) => {
@@ -159,6 +178,14 @@ export default function FeriasPage() {
     })
   }
 
+  useEffect(() => {
+    const empId = searchParams.get('employeeId')
+    if (empId) {
+      setFormData((prev) => ({ ...prev, employeeId: empId }))
+      setIsFormOpen(true)
+    }
+  }, [searchParams])
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsSubmitting(true)
@@ -182,24 +209,40 @@ export default function FeriasPage() {
       return
     }
 
-    await apiCreateVacation({
-      employeeId: formData.employeeId,
-      startDate: formData.startDate,
-      endDate: formData.endDate,
-      days: calculateDays(formData.startDate, formData.endDate),
-      paidAmount: paidAmountNumber,
-      status: 'scheduled',
-      acquisitionPeriodStart: formData.acquisitionPeriodStart,
-      acquisitionPeriodEnd: formData.acquisitionPeriodEnd,
-    } as any)
-    await mutateVacations()
-    setIsFormOpen(false)
-    resetForm()
-    setIsSubmitting(false)
-    toast({
-      title: 'Ferias agendadas',
-      description: `Ferias de ${employee.name} foram agendadas com sucesso.`,
-    })
+    try {
+      await apiCreateVacation({
+        employeeId: formData.employeeId,
+        startDate: formData.startDate,
+        endDate: formData.endDate,
+        days: calculateDays(formData.startDate, formData.endDate),
+        paidAmount: paidAmountNumber,
+        status: 'scheduled',
+        acquisitionPeriodStart: formData.acquisitionPeriodStart,
+        acquisitionPeriodEnd: formData.acquisitionPeriodEnd,
+      } as any)
+      await mutateVacations()
+      setIsFormOpen(false)
+      resetForm()
+      toast({
+        title: 'Ferias agendadas',
+        description: `Ferias de ${employee.name} foram agendadas com sucesso.`,
+      })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Falha ao agendar ferias'
+      let description = 'Nao foi possivel agendar ferias.'
+      if (message.includes('overlap')) {
+        description = 'Ja existe ferias sobrepondo este periodo para o funcionario.'
+      } else if (message.includes('start_after_end')) {
+        description = 'Data inicial nao pode ser maior que a data final.'
+      }
+      toast({
+        title: 'Erro ao agendar',
+        description,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   const getStoreName = (storeId: string) => {
@@ -372,7 +415,13 @@ export default function FeriasPage() {
         </Dialog>
       </div>
 
-      {/* Alert Cards */}
+      <Tabs defaultValue="geral" className="space-y-6">
+        <TabsList>
+          <TabsTrigger value="geral">Visao Geral</TabsTrigger>
+          <TabsTrigger value="radar">Radar 60/30/15</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="geral" className="space-y-6">
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="border-destructive/50 bg-destructive/5">
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -382,6 +431,11 @@ export default function FeriasPage() {
           <CardContent>
             <div className="text-3xl font-bold text-destructive">{stats.alertCounts.critical}</div>
             <p className="text-xs text-muted-foreground mt-1">Ferias prestes a vencer</p>
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => { setAlertsCategory('critical'); setAlertsOpen(true) }}>
+                Visualizar
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -393,6 +447,11 @@ export default function FeriasPage() {
           <CardContent>
             <div className="text-3xl font-bold text-yellow-600">{stats.alertCounts.attention}</div>
             <p className="text-xs text-muted-foreground mt-1">Necessitam agendamento</p>
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => { setAlertsCategory('attention'); setAlertsOpen(true) }}>
+                Visualizar
+              </Button>
+            </div>
           </CardContent>
         </Card>
 
@@ -404,11 +463,15 @@ export default function FeriasPage() {
           <CardContent>
             <div className="text-3xl font-bold text-blue-600">{stats.alertCounts.planning}</div>
             <p className="text-xs text-muted-foreground mt-1">Planejar ferias</p>
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => { setAlertsCategory('planning'); setAlertsOpen(true) }}>
+                Visualizar
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Stats Cards */}
       <div className="grid gap-4 md:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -444,7 +507,115 @@ export default function FeriasPage() {
         </Card>
       </div>
 
-      {/* Filters */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Calendar className="h-5 w-5 text-primary" />
+              Proximas Ferias
+            </CardTitle>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={() => setAlertsOpen(true)}>
+                Alertas de Ferias
+              </Button>
+              <span className="text-xs text-muted-foreground">Periodo</span>
+              <Select value={String(upcomingDays)} onValueChange={(v) => setUpcomingDays(parseInt(v, 10))}>
+                <SelectTrigger className="h-7 w-[90px]">
+                  <SelectValue placeholder="Dias" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="30">30 dias</SelectItem>
+                  <SelectItem value="60">60 dias</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-sm text-muted-foreground">Nos proximos {upcomingDays} dias</p>
+        </CardHeader>
+        <CardContent>
+          {upcomingVacations.length > 0 ? (
+            <div className="space-y-3">
+              {upcomingVacations.slice(0, 6).map((vacation: any) => {
+                const employee = (employees || []).find((e: any) => e.id === ((vacation as any).employeeId || (vacation as any).employee_id))
+                return (
+                  <div key={vacation.id} className="flex items-center gap-3">
+                    <Avatar className="h-8 w-8">
+                      <AvatarImage src={(employee as any)?.avatarUrl || (employee as any)?.avatar_url || undefined} alt={employee?.name || 'Avatar'} />
+                      <AvatarFallback className="text-xs">
+                        {employee ? getInitials(employee.name) : '??'}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium truncate">{employee?.name || 'Funcionario'}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatDate(String((vacation as any).startDate || (vacation as any).start_date))} - {(vacation as any).days} dias
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">Nenhuma ferias agendada</p>
+          )}
+        </CardContent>
+      </Card>
+      <Dialog open={alertsOpen} onOpenChange={setAlertsOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>
+              {alertsCategory === 'critical' ? 'Critico - 15 dias' : alertsCategory === 'attention' ? 'Atencao - 30 dias' : 'Planejamento - 60 dias'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-muted-foreground">Categoria</span>
+            <Select value={alertsCategory} onValueChange={(v) => setAlertsCategory(v as any)}>
+              <SelectTrigger className="h-8 w-[180px]">
+                <SelectValue placeholder="Categoria" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="critical">Critico - 15 dias</SelectItem>
+                <SelectItem value="attention">Atencao - 30 dias</SelectItem>
+                <SelectItem value="planning">Planejamento - 60 dias</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            {employeesWithAlerts.filter(e => e.vacationAlert.level === alertsCategory).length > 0 ? (
+              employeesWithAlerts
+                .filter(e => e.vacationAlert.level === alertsCategory)
+                .map((emp: any) => {
+                  const storeId = (emp as any).storeId || (emp as any).store_id
+                  const store = stores.find(s => (s as any).id === storeId)
+                  const daysInfo = (emp as any).vacationAlert?.daysUntilDeadline ?? 0
+                  return (
+                    <div key={emp.id} className="flex items-center justify-between p-2 border rounded-md">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Avatar className="h-8 w-8">
+                          <AvatarFallback className="text-xs">
+                            {emp.name?.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="min-w-0">
+                          <div className="text-sm font-medium truncate">{emp.name}</div>
+                          <div className="text-xs text-muted-foreground truncate">
+                            {store ? store.name : 'N/A'} • vence em {daysInfo} dia(s)
+                          </div>
+                        </div>
+                      </div>
+                      <Button size="sm" variant="outline" onClick={() => { setFormData((prev) => ({ ...prev, employeeId: emp.id })); setIsFormOpen(true) }}>
+                        Agendar
+                      </Button>
+                    </div>
+                  )
+                })
+            ) : (
+              <div className="text-sm text-muted-foreground">Nenhum colaborador nesta categoria.</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Filtros</CardTitle>
@@ -489,7 +660,6 @@ export default function FeriasPage() {
         </CardContent>
       </Card>
 
-      {/* Vacations Table */}
       <Card>
         <CardContent className="p-0">
           <Table>
@@ -557,6 +727,128 @@ export default function FeriasPage() {
           </Table>
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="radar" className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Radar de Ferias</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-col gap-4 md:flex-row">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Buscar por nome ou CPF..."
+                    value={radarSearchTerm}
+                    onChange={(e) => setRadarSearchTerm(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <Select value={radarCategory} onValueChange={setRadarCategory}>
+                  <SelectTrigger className="w-full md:w-[200px]">
+                    <SelectValue placeholder="Categoria" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas as Categorias</SelectItem>
+                    <SelectItem value="critical">Critico (15 dias)</SelectItem>
+                    <SelectItem value="attention">Atencao (30 dias)</SelectItem>
+                    <SelectItem value="planning">Planejamento (60 dias)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={radarStoreFilter} onValueChange={setRadarStoreFilter}>
+                  <SelectTrigger className="w-full md:w-[180px]">
+                    <SelectValue placeholder="Loja" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Todas as Lojas</SelectItem>
+                    {stores.map((store) => (
+                      <SelectItem key={store.id} value={store.id}>
+                        {store.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Funcionario</TableHead>
+                    <TableHead className="hidden md:table-cell">Loja</TableHead>
+                    <TableHead>Categoria</TableHead>
+                    <TableHead className="text-center">Vence em</TableHead>
+                    <TableHead className="w-[140px] text-right">Acoes</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredRadarEmployees.length > 0 ? (
+                    filteredRadarEmployees.map((emp: any) => {
+                      const storeId = (emp as any).storeId || (emp as any).store_id
+                      const alert = (emp as any).vacationAlert
+                      return (
+                        <TableRow key={emp.id}>
+                          <TableCell>
+                            <div className="flex items-center gap-3">
+                              <Avatar className="h-9 w-9">
+                                <AvatarImage src={(emp as any).avatarUrl || (emp as any).avatar_url || undefined} alt={emp.name} />
+                                <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                                  {getInitials(emp.name)}
+                                </AvatarFallback>
+                              </Avatar>
+                              <span className="font-medium">{emp.name}</span>
+                            </div>
+                          </TableCell>
+                          <TableCell className="hidden md:table-cell">
+                            <Badge variant="outline">{getStoreName(String(storeId))}</Badge>
+                          </TableCell>
+                          <TableCell>
+                            {alert?.level === 'critical' && <div className="flex items-center gap-1 text-destructive"><AlertTriangle className="h-4 w-4" /><span className="text-xs">Critico</span></div>}
+                            {alert?.level === 'attention' && <div className="flex items-center gap-1 text-yellow-600"><AlertCircle className="h-4 w-4" /><span className="text-xs">Atencao</span></div>}
+                            {alert?.level === 'planning' && <div className="flex items-center gap-1 text-blue-600"><Info className="h-4 w-4" /><span className="text-xs">Planejamento</span></div>}
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge variant="secondary">{alert?.daysUntilDeadline ?? 0} dia(s)</Badge>
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex justify-end gap-2">
+                              <Button size="sm" variant="outline" onClick={() => { setFormData((prev) => ({ ...prev, employeeId: emp.id })); setIsFormOpen(true) }}>
+                                Agendar
+                              </Button>
+                              <Button size="sm" variant="ghost" onClick={() => { setSelectedEmployee(emp); setIsProfileOpen(true) }}>
+                                Ver Perfil
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })
+                  ) : (
+                    <TableRow>
+                      <TableCell colSpan={5} className="h-24 text-center">
+                        Nenhum colaborador no radar.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
+
+      <Dialog open={isProfileOpen} onOpenChange={setIsProfileOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Perfil do Funcionario</DialogTitle>
+          </DialogHeader>
+          {selectedEmployee && <EmployeeProfile employee={selectedEmployee} />}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

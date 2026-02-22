@@ -383,31 +383,64 @@ export async function getVacations(): Promise<Vacation[]> {
     .order('start_date', { ascending: false })
   
   if (error) throw new Error(error.message)
-  return data?.map(v => ({
-    id: v.id,
-    employeeId: v.employee_id,
-    employeeName: v.employees?.name || '',
-    startDate: v.start_date,
-    endDate: v.end_date,
-    days: v.days,
-    paidAmount: Number(v.paid_amount),
-    status: v.status,
-    acquisitionPeriodStart: v.acquisition_period_start,
-    acquisitionPeriodEnd: v.acquisition_period_end,
-  })) || []
+  const today = new Date().toISOString().split('T')[0]
+  return data?.map(v => {
+    let st = v.status as Vacation['status']
+    if (st !== 'cancelled') {
+      if (today < v.start_date) st = 'scheduled'
+      else if (today > v.end_date) st = 'completed'
+      else st = 'in-progress'
+    }
+    return {
+      id: v.id,
+      employeeId: v.employee_id,
+      employeeName: v.employees?.name || '',
+      startDate: v.start_date,
+      endDate: v.end_date,
+      days: v.days,
+      paidAmount: Number(v.paid_amount),
+      status: st,
+      acquisitionPeriodStart: v.acquisition_period_start,
+      acquisitionPeriodEnd: v.acquisition_period_end,
+    }
+  }) || []
 }
 
 export async function createVacation(vacation: Omit<Vacation, 'id'>): Promise<Vacation> {
   const supabase = await createClient()
+  const start = String(vacation.startDate)
+  const end = String(vacation.endDate)
+  if (!start || !end) throw new Error('startDate/endDate required')
+  if (new Date(start) > new Date(end)) throw new Error('start_after_end')
+  const millis = new Date(end).getTime() - new Date(start).getTime()
+  const days = Math.ceil(millis / (1000 * 60 * 60 * 24)) + 1
+  const { data: overlaps } = await supabase
+    .from('vacations')
+    .select('id')
+    .eq('employee_id', vacation.employeeId)
+    .neq('status', 'cancelled')
+    .lte('start_date', end)
+    .gte('end_date', start)
+    .limit(1)
+  if (overlaps && overlaps.length > 0) {
+    throw new Error('overlap')
+  }
+  const today = new Date().toISOString().split('T')[0]
+  let st = vacation.status
+  if (st !== 'cancelled') {
+    if (today < start) st = 'scheduled'
+    else if (today > end) st = 'completed'
+    else st = 'in-progress'
+  }
   const { data, error } = await supabase
     .from('vacations')
     .insert({
       employee_id: vacation.employeeId,
-      start_date: vacation.startDate,
-      end_date: vacation.endDate,
-      days: vacation.days,
+      start_date: start,
+      end_date: end,
+      days: days,
       paid_amount: vacation.paidAmount,
-      status: vacation.status,
+      status: st,
       acquisition_period_start: vacation.acquisitionPeriodStart,
       acquisition_period_end: vacation.acquisitionPeriodEnd,
     })
@@ -415,29 +448,73 @@ export async function createVacation(vacation: Omit<Vacation, 'id'>): Promise<Va
     .single()
   
   if (error) throw new Error(error.message)
-  return {
-    id: data.id,
-    employeeId: data.employee_id,
-    employeeName: data.employees?.name || '',
-    startDate: data.start_date,
-    endDate: data.end_date,
-    days: data.days,
-    paidAmount: Number(data.paid_amount),
-    status: data.status,
-    acquisitionPeriodStart: data.acquisition_period_start,
-    acquisitionPeriodEnd: data.acquisition_period_end,
+  {
+    const today = new Date().toISOString().split('T')[0]
+    let st = data.status as Vacation['status']
+    if (st !== 'cancelled') {
+      if (today < data.start_date) st = 'scheduled'
+      else if (today > data.end_date) st = 'completed'
+      else st = 'in-progress'
+    }
+    return {
+      id: data.id,
+      employeeId: data.employee_id,
+      employeeName: data.employees?.name || '',
+      startDate: data.start_date,
+      endDate: data.end_date,
+      days: data.days,
+      paidAmount: Number(data.paid_amount),
+      status: st,
+      acquisitionPeriodStart: data.acquisition_period_start,
+      acquisitionPeriodEnd: data.acquisition_period_end,
+    }
   }
 }
 
 export async function updateVacation(id: string, vacation: Partial<Vacation>): Promise<Vacation> {
   const supabase = await createClient()
+  const { data: existing, error: getErr } = await supabase
+    .from('vacations')
+    .select('*')
+    .eq('id', id)
+    .single()
+  if (getErr) throw new Error(getErr.message)
   const updateData: Record<string, unknown> = {}
   
   if (vacation.startDate !== undefined) updateData.start_date = vacation.startDate
   if (vacation.endDate !== undefined) updateData.end_date = vacation.endDate
-  if (vacation.days !== undefined) updateData.days = vacation.days
+  const newStart = String((vacation.startDate ?? existing.start_date) || '')
+  const newEnd = String((vacation.endDate ?? existing.end_date) || '')
+  if (newStart && newEnd) {
+    if (new Date(newStart) > new Date(newEnd)) throw new Error('start_after_end')
+    updateData.days = Math.ceil((new Date(newEnd).getTime() - new Date(newStart).getTime()) / (1000 * 60 * 60 * 24)) + 1
+  } else if (vacation.days !== undefined) {
+    updateData.days = vacation.days
+  }
   if (vacation.paidAmount !== undefined) updateData.paid_amount = vacation.paidAmount
-  if (vacation.status !== undefined) updateData.status = vacation.status
+  const empId = existing.employee_id as string
+  const { data: overlaps } = await supabase
+    .from('vacations')
+    .select('id')
+    .eq('employee_id', empId)
+    .neq('id', id)
+    .neq('status', 'cancelled')
+    .lte('start_date', newEnd)
+    .gte('end_date', newStart)
+    .limit(1)
+  if (overlaps && overlaps.length > 0) {
+    throw new Error('overlap')
+  }
+  let st = (vacation.status ?? existing.status) as Vacation['status']
+  if (st !== 'cancelled') {
+    const today = new Date().toISOString().split('T')[0]
+    if (newStart && newEnd) {
+      if (today < newStart) st = 'scheduled'
+      else if (today > newEnd) st = 'completed'
+      else st = 'in-progress'
+    }
+  }
+  updateData.status = st
 
   const { data, error } = await supabase
     .from('vacations')
@@ -447,17 +524,26 @@ export async function updateVacation(id: string, vacation: Partial<Vacation>): P
     .single()
   
   if (error) throw new Error(error.message)
-  return {
-    id: data.id,
-    employeeId: data.employee_id,
-    employeeName: data.employees?.name || '',
-    startDate: data.start_date,
-    endDate: data.end_date,
-    days: data.days,
-    paidAmount: Number(data.paid_amount),
-    status: data.status,
-    acquisitionPeriodStart: data.acquisition_period_start,
-    acquisitionPeriodEnd: data.acquisition_period_end,
+  {
+    const today = new Date().toISOString().split('T')[0]
+    let st = data.status as Vacation['status']
+    if (st !== 'cancelled') {
+      if (today < data.start_date) st = 'scheduled'
+      else if (today > data.end_date) st = 'completed'
+      else st = 'in-progress'
+    }
+    return {
+      id: data.id,
+      employeeId: data.employee_id,
+      employeeName: data.employees?.name || '',
+      startDate: data.start_date,
+      endDate: data.end_date,
+      days: data.days,
+      paidAmount: Number(data.paid_amount),
+      status: st,
+      acquisitionPeriodStart: data.acquisition_period_start,
+      acquisitionPeriodEnd: data.acquisition_period_end,
+    }
   }
 }
 
@@ -881,10 +967,14 @@ export async function getDashboardStats() {
     .select('*', { count: 'exact', head: true })
     .eq('status', 'active')
   
-  const { count: onVacation } = await supabase
-    .from('employees')
-    .select('*', { count: 'exact', head: true })
-    .eq('status', 'vacation')
+  const todayStr = new Date().toISOString().split('T')[0]
+  const { data: inProgressVacations } = await supabase
+    .from('vacations')
+    .select('employee_id, status, start_date, end_date')
+    .neq('status', 'cancelled')
+    .lte('start_date', todayStr)
+    .gte('end_date', todayStr)
+  const onVacation = new Set((inProgressVacations || []).map(v => v.employee_id)).size
   
   // Get current month birthdays
   const currentMonth = new Date().getMonth() + 1
@@ -899,7 +989,7 @@ export async function getDashboardStats() {
   }) || []
 
   // Get upcoming vacations
-  const today = new Date().toISOString().split('T')[0]
+  const today = todayStr
   const { data: upcomingVacations } = await supabase
     .from('vacations')
     .select(`*, employees(name)`)

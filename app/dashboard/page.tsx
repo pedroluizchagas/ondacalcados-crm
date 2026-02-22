@@ -15,56 +15,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { useStores, useEmployees, useVacations, useMedicalCertificates, usePayroll, useResignations } from '@/hooks/use-data'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+ import { useStores, useEmployees, useVacations, useMedicalCertificates, usePayroll, useResignations } from '@/hooks/use-data'
+ import { getVacationRadar } from '@/lib/vacation-radar'
 import { Users, UserCheck, Palmtree, AlertTriangle, AlertCircle, Info, Cake, Calendar, ArrowRight, FileText, CalendarDays, DollarSign, Store, UserMinus, Loader2 } from 'lucide-react'
 import { Bar, BarChart, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { ChartContainer } from '@/components/ui/chart'
 import type { Employee, Vacation } from '@/types'
-
-// Helper function to calculate vacation alert level
-function getVacationAlertLevel(employee: Employee, vacations: Vacation[]): { level: 'critical' | 'attention' | 'planning' | 'ok', daysUntilExpiry: number } {
-  const hireDate = new Date(employee.hire_date)
-  const today = new Date()
-  
-  // Calculate acquisition periods
-  const yearsSinceHire = Math.floor((today.getTime() - hireDate.getTime()) / (1000 * 60 * 60 * 24 * 365))
-  
-  if (yearsSinceHire < 1) {
-    return { level: 'ok', daysUntilExpiry: 365 }
-  }
-  
-  // Check if there's a scheduled or completed vacation for the current acquisition period
-  const hasRecentVacation = vacations.some(v => 
-    v.employee_id === employee.id && 
-    (v.status === 'scheduled' || v.status === 'completed' || v.status === 'in-progress')
-  )
-  
-  if (hasRecentVacation) {
-    return { level: 'ok', daysUntilExpiry: 365 }
-  }
-  
-  // Calculate days until vacation expires (after 2 years from hire anniversary)
-  const lastAnniversary = new Date(hireDate)
-  lastAnniversary.setFullYear(today.getFullYear())
-  if (lastAnniversary > today) {
-    lastAnniversary.setFullYear(today.getFullYear() - 1)
-  }
-  
-  const expiryDate = new Date(lastAnniversary)
-  expiryDate.setFullYear(expiryDate.getFullYear() + 1)
-  
-  const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-  
-  if (daysUntilExpiry <= 15) {
-    return { level: 'critical', daysUntilExpiry }
-  } else if (daysUntilExpiry <= 30) {
-    return { level: 'attention', daysUntilExpiry }
-  } else if (daysUntilExpiry <= 60) {
-    return { level: 'planning', daysUntilExpiry }
-  }
-  
-  return { level: 'ok', daysUntilExpiry }
-}
 
 export default function DashboardPage() {
   const today = useMemo(() => new Date(), [])
@@ -77,6 +34,9 @@ export default function DashboardPage() {
   })
 
   const [storeFilter, setStoreFilter] = useState<string>('all')
+  const [upcomingDays, setUpcomingDays] = useState<number>(30)
+  const [alertsOpen, setAlertsOpen] = useState(false)
+  const [alertsCategory, setAlertsCategory] = useState<'critical' | 'attention' | 'planning'>('critical')
 
   // Fetch data using SWR hooks
   const { data: stores = [], isLoading: loadingStores } = useStores()
@@ -96,23 +56,42 @@ export default function DashboardPage() {
     // Filter employees by store
     const filteredEmployees = storeFilter === 'all' 
       ? employees 
-      : employees.filter(e => e.store_id === storeFilter)
+      : employees.filter(e => ((e as any).storeId || (e as any).store_id) === storeFilter)
 
     const activeEmployees = filteredEmployees.filter((e) => e.status === 'active')
-    const onVacation = filteredEmployees.filter((e) => e.status === 'vacation')
+    const onVacationSet = new Set<string>()
+    const todayStr = today.toISOString().split('T')[0]
+    vacations.forEach(v => {
+      const start = String((v as any).startDate || (v as any).start_date || '')
+      const end = String((v as any).endDate || (v as any).end_date || '')
+      const isCancelled = (v as any).status === 'cancelled'
+      if (!start || !end || isCancelled) return
+      if (start <= todayStr && todayStr <= end) {
+        const empId = String((v as any).employeeId || (v as any).employee_id || '')
+        if (empId) {
+          const emp = employees.find(e => e.id === empId)
+          if (!emp) return
+          if (storeFilter !== 'all' && ((emp as any).storeId || (emp as any).store_id) !== storeFilter) return
+          onVacationSet.add(empId)
+        }
+      }
+    })
     
     const birthdays = filteredEmployees.filter((e) => {
-      if (!e.birth_date) return false
-      const birthDate = new Date(e.birth_date)
+      const birth = (e as any).birthDate || (e as any).birth_date
+      if (!birth) return false
+      const birthDate = new Date(birth)
       return birthDate.getMonth() === currentMonth && e.status !== 'terminated'
     })
 
     const upcomingVacations = vacations.filter((v) => {
-      const employee = employees.find(e => e.id === v.employee_id)
-      if (storeFilter !== 'all' && employee?.store_id !== storeFilter) return false
-      const vacStartDate = new Date(v.start_date)
+      const employee = employees.find(e => e.id === ((v as any).employeeId || (v as any).employee_id))
+      if (storeFilter !== 'all' && ((employee as any)?.storeId || (employee as any)?.store_id) !== storeFilter) return false
+      const vacStart = (v as any).startDate || (v as any).start_date
+      if (!vacStart) return false
+      const vacStartDate = new Date(vacStart)
       const diffDays = Math.ceil((vacStartDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-      return diffDays > 0 && diffDays <= 30 && v.status === 'scheduled'
+      return diffDays > 0 && diffDays <= upcomingDays && (v as any).status === 'scheduled'
     })
 
     const vacationAlerts = {
@@ -120,19 +99,16 @@ export default function DashboardPage() {
       attention: [] as Employee[],
       planning: [] as Employee[],
     }
-
-    filteredEmployees
-      .filter((e) => e.status === 'active')
-      .forEach((employee) => {
-        const { level } = getVacationAlertLevel(employee, vacations)
-        if (level === 'critical') {
-          vacationAlerts.critical.push(employee)
-        } else if (level === 'attention') {
-          vacationAlerts.attention.push(employee)
-        } else if (level === 'planning') {
-          vacationAlerts.planning.push(employee)
-        }
-      })
+    const employeesForAlerts = filteredEmployees.filter((e) => e.status !== 'terminated')
+    const employeesWithAlerts: Array<Employee & { vacationAlert: { level: 'critical' | 'attention' | 'planning' | 'ok', daysUntilDeadline: number } }> =
+      getVacationRadar(employeesForAlerts as any, vacations as any) as any
+    const alertByEmployeeId = new Map(employeesWithAlerts.map((e: any) => [e.id, (e as any).vacationAlert]))
+    employeesWithAlerts.forEach((e: any) => {
+      const level = (e as any).vacationAlert?.level
+      if (level === 'critical') vacationAlerts.critical.push(e as Employee)
+      else if (level === 'attention') vacationAlerts.attention.push(e as Employee)
+      else if (level === 'planning') vacationAlerts.planning.push(e as Employee)
+    })
 
     const certificatesInPeriod = certificates.filter((cert) => {
       const employee = employees.find(e => e.id === cert.employee_id)
@@ -197,19 +173,20 @@ export default function DashboardPage() {
     return {
       total: filteredEmployees.filter((e) => e.status !== 'terminated').length,
       active: activeEmployees.length,
-      onVacation: onVacation.length,
+      onVacation: onVacationSet.size,
       totalCertificates: certificatesInPeriod.length,
       totalCertificateDays: certificatesInPeriod.reduce((sum, cert) => sum + cert.days, 0),
       birthdays,
       upcomingVacations,
       vacationAlerts,
+      alertByEmployeeId,
       expensesByStore,
       totalPayrollExpense,
       resignationsChartData,
       totalResignations,
       thisMonthResignations,
     }
-  }, [dateRange, storeFilter, employees, vacations, certificates, payroll, resignations, stores, today])
+  }, [dateRange, storeFilter, employees, vacations, certificates, payroll, resignations, stores, today, upcomingDays])
 
   const getInitials = (name: string) => {
     return name
@@ -502,6 +479,11 @@ export default function DashboardPage() {
                   ))}
                 </div>
               )}
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => { setAlertsCategory('critical'); setAlertsOpen(true) }}>
+                Visualizar
+              </Button>
+            </div>
             </CardContent>
           </Card>
 
@@ -528,6 +510,11 @@ export default function DashboardPage() {
                   ))}
                 </div>
               )}
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => { setAlertsCategory('attention'); setAlertsOpen(true) }}>
+                Visualizar
+              </Button>
+            </div>
             </CardContent>
           </Card>
 
@@ -554,27 +541,101 @@ export default function DashboardPage() {
                   ))}
                 </div>
               )}
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => { setAlertsCategory('planning'); setAlertsOpen(true) }}>
+                Visualizar
+              </Button>
+            </div>
             </CardContent>
           </Card>
         </div>
       </div>
+      <Dialog open={alertsOpen} onOpenChange={setAlertsOpen}>
+        <DialogContent className="sm:max-w-[600px]">
+          <DialogHeader>
+            <DialogTitle>
+              {alertsCategory === 'critical' ? 'Crítico - 15 dias' : alertsCategory === 'attention' ? 'Atenção - 30 dias' : 'Planejamento - 60 dias'}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-muted-foreground">Categoria</span>
+            <Select value={alertsCategory} onValueChange={(v) => setAlertsCategory(v as any)}>
+              <SelectTrigger className="h-8 w-[180px]">
+                <SelectValue placeholder="Categoria" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="critical">Crítico - 15 dias</SelectItem>
+                <SelectItem value="attention">Atenção - 30 dias</SelectItem>
+                <SelectItem value="planning">Planejamento - 60 dias</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            {(stats.vacationAlerts as any)[alertsCategory].length > 0 ? (
+              (stats.vacationAlerts as any)[alertsCategory].map((emp: any) => {
+                const storeId = (emp as any).storeId || (emp as any).store_id
+                const store = stores.find(s => (s as any).id === storeId)
+                const daysInfo = (stats as any).alertByEmployeeId?.get(emp.id)?.daysUntilDeadline ?? 0
+                return (
+                  <div key={emp.id} className="flex items-center justify-between p-2 border rounded-md">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <Avatar className="h-8 w-8">
+                        <AvatarFallback className="text-xs">
+                          {getInitials(emp.name)}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="min-w-0">
+                        <div className="text-sm font-medium truncate">{emp.name}</div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {store ? store.name : 'N/A'} • vence em {daysInfo} dia(s)
+                        </div>
+                      </div>
+                    </div>
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={`/dashboard/ferias?employeeId=${emp.id}`}>
+                        Agendar
+                      </Link>
+                    </Button>
+                  </div>
+                )
+              })
+            ) : (
+              <div className="text-sm text-muted-foreground">Nenhum colaborador nesta categoria.</div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Quick Links */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Upcoming Vacations */}
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Calendar className="h-5 w-5 text-primary" />
-              Proximas Ferias
-            </CardTitle>
-            <CardDescription>Nos proximos 30 dias</CardDescription>
+            <div className="flex items-center justify-between">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Calendar className="h-5 w-5 text-primary" />
+                Proximas Ferias
+              </CardTitle>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Periodo</span>
+                <Select value={String(upcomingDays)} onValueChange={(v) => setUpcomingDays(parseInt(v, 10))}>
+                  <SelectTrigger className="h-7 w-[90px]">
+                    <SelectValue placeholder="Dias" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="30">30 dias</SelectItem>
+                    <SelectItem value="60">60 dias</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <CardDescription>Nos proximos {upcomingDays} dias</CardDescription>
           </CardHeader>
           <CardContent>
             {stats.upcomingVacations.length > 0 ? (
               <div className="space-y-3">
                 {stats.upcomingVacations.slice(0, 3).map((vacation) => {
-                  const employee = employees.find(e => e.id === vacation.employee_id)
+                  const employee = employees.find(e => e.id === ((vacation as any).employeeId || (vacation as any).employee_id))
                   return (
                     <div key={vacation.id} className="flex items-center gap-3">
                       <Avatar className="h-8 w-8">
@@ -586,7 +647,7 @@ export default function DashboardPage() {
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium truncate">{employee?.name || 'Funcionario'}</p>
                         <p className="text-xs text-muted-foreground">
-                          {formatDate(vacation.start_date)} - {vacation.days} dias
+                          {formatDate(String((vacation as any).startDate || (vacation as any).start_date))} - {(vacation as any).days} dias
                         </p>
                       </div>
                     </div>

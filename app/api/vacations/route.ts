@@ -21,9 +21,8 @@ export async function POST(request: Request) {
     return NextResponse.json(vacation, { status: 201 })
   } catch (error) {
     console.error('Error creating vacation:', error)
-    return NextResponse.json(
-      { error: 'Failed to create vacation' },
-      { status: 500 }
-    )
+    const message = error instanceof Error ? error.message : 'Failed to create vacation'
+    const status = message === 'overlap' || message === 'start_after_end' ? 400 : 500
+    return NextResponse.json({ error: message }, { status })
   }
 }
